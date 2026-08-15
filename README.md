@@ -1,8 +1,8 @@
 # IPSable-but-worse
 
-A fork of [IPSable](https://github.com/r2smith141/IPSable) (which itself is a fork of [Immersive Portals for NeoForge](https://github.com/iPortalTeam/ImmersivePortalsModForNeo)) that tries to make Immersive Portals work with Sable physics in the [Create Convoluted](https://modrinth.com/modpack/create-convoluted) modpack.
+A fork of [IPSable](https://github.com/r2smith141/IPSable) (which itself is a fork of [Immersive Portals for NeoForge](https://github.com/iPortalTeam/ImmersivePortalsModForNeo)) that makes Immersive Portals work with Sable physics in the [Create Convoluted](https://modrinth.com/modpack/create-convoluted) modpack.
 
-**Status: indev.** This does not fully work yet. It boots, it doesn't crash, portals render, but there are still visual bugs (shadow stripes, ghost terrain, shaders fighting the portal rendering). I'm working through them.
+**Status: indev (v0.6.8).** The mod boots, doesn't crash, portals render, and the major rendering bugs from 0.6.7 have been fixed. Still untested by me as of this version - build it and tell me what breaks. See [changelog.md](changelog.md) for what changed.
 
 ## What this is
 
@@ -21,16 +21,26 @@ The stock mods don't get along. Immersive Portals and Sable both hook the same e
 - Cross-portal physics (Sable sub-levels straddle portals) — upstream IPSable work
 - Sound Physics mods no longer spam the log with raycast errors
 - DH's render-setup handler no longer throws 15,000+ exceptions per session
+- Auto-enables compatibility render mode when Iris + DH are both detected
+- DH config auto-patches to ignore the hosting dimension (with retry on first launch)
+- Lightmap correctly updates when switching dimensions for portal render
+
+## What was fixed in 0.6.8
+
+The 0.6.7 rendering fixes had two critical bugs that meant they only applied to half the shader bind paths. Fixed:
+
+- **Shadow stripes** — the clip equation refresh only worked for one of two program-bind hooks. Now both hooks delegate to a single shared path, so the fix applies to all shaders (terrain, entity, Iris-rewritten, Flywheel)
+- **Liquids/particles through terrain** — same root cause, same fix. The no-clip sentinel now reaches all programs
+- **DH data collision** — the mixin that was supposed to prevent DH from creating a DhLevel for the hosting dimension never actually applied (Mixin refuses cancellable injections on constructors, and `require=0` silently swallowed the error). Replaced with a proper `@Inject` on `DhServerWorld.getOrLoadLevel` + `DhClientServerWorld.getOrLoadLevel` that returns null
+- **Entity shadow stripes** — the clip equation refresh only updated the world-space equation, not the eye-space one. Entity/particle/BE shaders still got stale equations. Now refreshes both using `RenderSystem.getModelViewMatrix()`
+
+Full details in [changelog.md](changelog.md).
 
 ## What doesn't work yet
 
-These are the things I'm still fighting:
-
-- **Shadow stripes** — z-fighting from the clip plane, shows up as bands of broken lighting across terrain near portals
-- **Ghost terrain** — small sections of the wrong dimension render through, with broken lighting
-- **Shaders + portals** — Iris shaderpacks don't fully cooperate with the portal re-render path
-- **Portal visible through blocks** — with shaders on, the portal surface can show through solid terrain
-- **Distant Horizons data collision** — DH accumulates data paths across dimensions because of the IPSable hosting dimension model. There's a config patch that tries to work around it but it needs a relaunch to take effect
+- **Portal visible through blocks with shaders** — Iris depth buffer management in the compatibility renderer. The portal quad can show through solid terrain when a shaderpack is active
+- **Wrong water color through portals** — biome color resolver isn't swapped during portal render, so water on the destination side uses the source dimension's color
+- **Ghost terrain** — should be fixed by the 0.6.8 clip equation refresh, needs testing
 
 If you want to help, grab the latest build, test it, and tell me what breaks.
 
@@ -59,7 +69,11 @@ cd IPSable-but-worse
 ./gradlew jarJar --no-daemon
 ```
 
-The jar ends up in `build/libs/`.
+The jar ends up at `build/libs/immersive-portals-sable-compat-0.6.8+ip-6.0.7.jar`.
+
+Drop it into your Minecraft instance's `mods/` folder. It replaces both:
+- `immersive_portals-6.0.7-all.jar` (upstream Immersive Portals)
+- `immersive_portal_sable_bridge-0.1.jar` (the decrepit bridge, now removed)
 
 ## Credits
 
