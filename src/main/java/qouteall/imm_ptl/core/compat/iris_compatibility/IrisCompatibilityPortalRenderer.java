@@ -12,6 +12,7 @@ import qouteall.imm_ptl.core.CHelper;
 import qouteall.imm_ptl.core.compat.IPPortingLibCompat;
 import qouteall.imm_ptl.core.portal.Portal;
 import qouteall.imm_ptl.core.portal.PortalRenderInfo;
+import qouteall.imm_ptl.core.render.FrontClipping;
 import qouteall.imm_ptl.core.render.MyGameRenderer;
 import qouteall.imm_ptl.core.render.MyRenderHelper;
 import qouteall.imm_ptl.core.render.SecondaryFrameBuffer;
@@ -103,6 +104,13 @@ public class IrisCompatibilityPortalRenderer extends PortalRenderer {
         renderPortalContent(portal);
         
         PortalRendering.popPortalLayer();
+        
+        // Defensive: ensure clipping is disabled after portal content render.
+        // Under Iris, MixinLevelRenderer.onAfterRenderingLayer may not fire
+        // if Iris bypasses the normal renderSectionLayer path. Without this,
+        // the clip plane stays enabled and the source dimension terrain
+        // gets clipped on the next frame (terrain disappears).
+        FrontClipping.disableClipping();
         
         CHelper.enableDepthClamp();
         

@@ -14,7 +14,6 @@ import qouteall.imm_ptl.core.CHelper;
 import qouteall.imm_ptl.core.IPCGlobal;
 import qouteall.imm_ptl.core.IPGlobal;
 import qouteall.imm_ptl.core.ducks.IEShader;
-import qouteall.imm_ptl.core.portal.Portal;
 import qouteall.imm_ptl.core.render.context_management.PortalRendering;
 import qouteall.q_misc_util.my_util.Plane;
 
@@ -84,6 +83,33 @@ public class FrontClipping {
             activeClipPlaneEquationBeforeModelView = null;
             disableClipping();
         }
+    }
+    
+    /**
+     * Re-compute the clip equation using the current camera position.
+     * The clip equation is camera-relative, so when the camera moves
+     * between shader binds, the equation becomes stale. This causes
+     * shadow stripes (bands of wrong lighting proportional to camera
+     * movement). Call this before uploading the equation to a shader
+     * to ensure it is up to date.
+     */
+    public static void refreshClipEquationForCurrentCamera() {
+        if (!isClippingEnabled) {
+            return;
+        }
+        Plane clipping = PortalRendering.getActiveClippingPlane();
+        if (clipping == null) {
+            return;
+        }
+        // Re-compute the world-space equation with current camera pos
+        activeClipPlaneEquationBeforeModelView =
+            getClipEquationInner(clipping.pos(), clipping.normal(), ADJUSTMENT);
+        // Note: we don't re-compute activeClipPlaneAfterModelView here
+        // because we don't have the current modelView matrix. The
+        // entity-style path uses the after-model-view equation, but
+        // terrain shaders use the before-model-view (world-space) one.
+        // The stripes are on terrain, so refreshing the world equation
+        // is sufficient for the main fix.
     }
     
     private static double[] transformClipEquation(

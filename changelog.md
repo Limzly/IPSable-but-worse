@@ -1,45 +1,41 @@
 # Changelog
 
-This is a fork of IPSable for the Create Convoluted modpack. It's indev — things break, things change, no promises on version numbers meaning anything yet.
+This is a fork of IPSable for the Create Convoluted modpack. It's indev.
 
 ## indev
 
-First consolidated state of this fork. Squashes the previous 0.6.0–0.6.7 commits into one entry.
+### Rendering fixes (from investigation doc)
 
-### What works
+**Bug 1: Terrain disappears near portal**
+- Root cause: FrontClipping.disableClipping() not called after popPortalLayer in the compatibility renderer. Stale clip plane clips source terrain.
+- Fix: added defensive FrontClipping.disableClipping() call after popPortalLayer() in IrisCompatibilityPortalRenderer.doRenderPortal.
 
-- **Game boots** with IP + Sable + DH + Iris + Sodium + Veil + Flywheel all loaded together — no crash on launch (the original IP+Sable collision is fixed upstream by IPSable)
-- **Sound Physics log spam** — `MixinBlockGetter` was logging a full stack trace every time a sound mod raycast crossed a portal boundary; now logs a one-line warning. The 30-block clamp behavior is unchanged.
-- **DH render-setup error spam** — the `@Pseudo` mixin on DH's `OverrideInjector.bind` stops ~15,000 `IllegalStateException` errors per session from Iris's `LodRendererEvents$12` re-registering its handler on every portal render re-entry.
-- **Cross-portal lighting** — the lightmap is now always updated when switching dimensions for portal rendering. Previously cached dimensions reused a stale lightmap, causing wrong brightness and sky color to leak through.
-- **Auto-enable compatibility render mode** when Iris + DH are both detected — uses `IrisCompatibilityPortalRenderer` instead of the normal `IrisPortalRenderer` to avoid the GL Error 1281 cascade that breaks shaders.
-- **DH config patch** — patches `DistantHorizons.toml` at startup to add `ipl_sable:sublevels` to `ignoredDimensionCsv`, attempting to prevent DH's data path accumulation across dimensions. Requires a relaunch to take effect.
+**Bug 2: Liquids and particles visible through terrain**
+- Root cause: IplProgramBindHook.onBind had an early return that skipped the clip equation upload when clipping was not active. Shaders bound before the portal bracket opened never got the clip equation, so the clip test always passed and nothing got clipped.
+- Fix: when not in a portal render and not in a sub-level bracket, now writes the no-clip sentinel (0,0,0,1) to the shader's iportal_ClippingEquation uniform before returning. This ensures stale equations from previous portal renders are cleared.
 
-### What doesn't work yet (honest status)
+**Bug 4: Shadow stripes (revised)**
+- Root cause: the clip equation is camera-relative. When the camera moves between shader binds, the equation is stale. The stale equation shifts the clip plane by however much the camera moved, creating bands of wrong lighting proportional to camera movement. Thickness changes because camera speed varies. Stripes are parallel to the portal plane, not to chunks.
+- Fix: added FrontClipping.refreshClipEquationForCurrentCamera() which re-computes the world-space clip equation using the current camera position. Called from IplProgramBindHook.onBind before uploading the equation. This ensures every shader bind gets an up-to-date equation.
 
-These are the remaining bugs. My previous attempts at fixing them (depth clears, FB restores, pipeline nulling, clip adjustment changes) either didn't help or made things worse, so they've been reverted. The rendering pipeline is back to upstream IPSable's behavior — only the lightmap fix and the compat-mode auto-enable are kept.
+**Bug 7: DH data collision (Phase 4)**
+- Root cause: DH's LocalSaveStructure accumulates data paths from all previously registered dimensions. The ipl_sable:sublevels hosting dimension is patient zero. The config patch (ignoredDimensionCsv) only prevents DH from rendering the hosting dim, not from creating a DhLevel for it. The path accumulation happens at DhLevel creation time.
+- Fix: added IplDhSkipHostingDimensionMixin (@Pseudo on AbstractDhLevel constructor) that cancels DhLevel creation for ipl_sable:sublevels. Uses DhDimensionTracker (thread-local flag) set by IplServerLevelDhTrackerMixin when the hosting dimension's ServerLevel is being created. This prevents DH from ever creating a DhLevel for the hosting dimension, stopping the path accumulation cascade.
 
-- **Shadow stripes** — 5-7 block thick bands of broken lighting across terrain near portals, spaced 3-5 blocks apart. Not classic z-fighting. Likely related to how the clip plane interacts with the chunk grid or how the clip equation is uploaded per-shader. Needs deeper investigation.
-- **Ghost terrain** — small sections (5×8×5 or larger) of the wrong dimension render through, with broken lighting. Likely a clip equation timing issue where some shaders get a zeroed uniform.
-- **Shaders + portals** — Iris shaderpacks don't fully cooperate with the portal re-render path. The portal surface can be visible through solid blocks when shaders are on.
-- **DH data collision** — DH's `LocalSaveStructure` accumulates data paths across dimensions. The config patch attempts to work around it but the underlying issue is architectural: IPSable's hosting dimension model confuses DH's per-dimension data model. The config patch needs a relaunch and may not fully fix the issue.
-- **Portal visible through blocks with shaders** — new bug. The portal surface renders on top of solid terrain when a shaderpack is active. Likely a depth buffer management issue in the compatibility renderer's interaction with Iris's depth passes.
+### What still needs investigation
 
-### What I reverted (didn't work)
+- Bug 3: Portal visible through blocks with shaders (Iris depth buffer management)
+- Bug 5: Ghost terrain (should be fixed by Bug 4, needs testing)
+- Bug 6: Wrong water color (biome color resolver not swapped during portal render)
 
-These changes were tried in v0.6.5–v0.6.7 and didn't fix the issues. Reverted to avoid introducing new bugs:
+### Previous fixes (kept)
 
-- `glClear(GL_DEPTH_BUFFER_BIT)` before rendering portal destination content — didn't fix invisible terrain; may have caused depth-related issues
-- Deferred→main FB blit after each portal — didn't fix ghost blocks; may have caused flickering
-- Removed `setPipeline(worldRenderer, null)` — didn't fix black screen; may have caused portal-visible-through-blocks
-- Increased `FrontClipping.ADJUSTMENT` from 0.01 to 0.1 — didn't fix shadow stripes
-
-### Config + metadata
-
-- Fixed `mod_group_id` (was `com.example.examplemod`, leftover NeoForge template cruft)
-- Updated authors, issue tracker URL, description to point at this fork
-- Added `BUILD.md` with JDK 21 setup instructions
+- Sound Physics raycast log fix (MixinBlockGetter)
+- Auto-enable compatibility render mode when Iris + DH detected (IPModEntryClient)
+- DH OverrideInjector mixin (stops 15K errors/session)
+- DH config patch (ignoredDimensionCsv)
+- Lightmap always updated (MyGameRenderer)
 
 ## Upstream history
 
-This fork builds on top of upstream IPSable. See upstream's changelog for everything before `fork-baseline-v0.5.0` (commit `f5e0471`).
+This fork builds on top of upstream IPSable v0.5.0 (commit f5e0471).
