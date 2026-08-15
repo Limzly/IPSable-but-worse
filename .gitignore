@@ -1,0 +1,58 @@
+# gradle
+
+.gradle/
+build/
+out/
+classes/
+
+# idea
+
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# vscode
+
+.settings/
+.vscode/
+bin/
+.classpath
+.project
+
+# fabric
+
+run/
+run_server/
+
+compiler_output/
+
+# macOS droppings
+
+.DS_Store
+
+# eclipse
+
+*.launch
+
+# whatever
+logs/
+/deps_unused/
+/deps/
+
+/misc/mesh_to_visualize.json
+
+/remappedSrc
+
+crowdin-translate-1.2.jar
+src/main/resources/immersive_portals.timestamp
+/libs/
+/runs/
+
+# IPSable natives dev loop: cargo build artifacts + locally-built DLL resource
+natives/target/
+src/main/resources/natives_ipl/
+
+# gam1r
+OTHERREQUIREDSOURCES/
+PROFILING/

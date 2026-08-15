@@ -1,0 +1,196 @@
+package qouteall.imm_ptl.core.portal.animation;
+
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.phys.Vec3;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+import qouteall.imm_ptl.core.McHelper;
+import qouteall.q_misc_util.Helper;
+import qouteall.q_misc_util.my_util.DQuaternion;
+
+public class RotationAnimation implements PortalAnimationDriver {
+    
+    public static void init() {
+        PortalAnimationDriver.registerDeserializer(
+            McHelper.newResourceLocation("imm_ptl:rotation"),
+            RotationAnimation::deserialize
+        );
+    }
+    
+    public final Vec3 initialOffset;
+    public final Vec3 rotationAxis;
+    public final double degreesPerTick;
+    public final long startGameTime;
+    public final long endGameTime;
+    @Nullable
+    public final TimingFunction timingFunction;
+    
+    public RotationAnimation(
+        Vec3 initialOffset,
+        Vec3 rotationAxis,
+        double degreesPerTick,
+        long startGameTime,
+        long endGameTime,
+        @Nullable TimingFunction timingFunction
+    ) {
+        this.initialOffset = initialOffset;
+        this.rotationAxis = rotationAxis;
+        this.degreesPerTick = degreesPerTick;
+        this.startGameTime = startGameTime;
+        this.endGameTime = endGameTime;
+        this.timingFunction = timingFunction;
+    }
+    
+    @Override
+    public CompoundTag toTag() {
+        CompoundTag tag = new CompoundTag();
+        
+        tag.putString("type", "imm_ptl:rotation");
+        Helper.putVec3d(tag, "initialOffset", initialOffset);
+        Helper.putVec3d(tag, "rotationAxis", rotationAxis);
+        tag.putDouble("degreesPerTick", degreesPerTick);
+        tag.putLong("startGameTime", startGameTime);
+        tag.putLong("endGameTime", endGameTime);
+        if (timingFunction != null) {
+            tag.putString("timingFunction", timingFunction.toString());
+        }
+        
+        return tag;
+    }
+    
+    private static RotationAnimation deserialize(CompoundTag tag) {
+        Vec3 initialOffset = Helper.getVec3d(tag, "initialOffset");
+        Vec3 rotationAxis = Helper.getVec3d(tag, "rotationAxis");
+        double degreesPerTick = tag.getDouble("degreesPerTick");
+        long startGameTime = tag.getLong("startGameTime");
+        long endGameTime = tag.getLong("endGameTime");
+        TimingFunction timingFunction = tag.contains("timingFunction") ?
+            TimingFunction.fromString(tag.getString("timingFunction")) : null;
+        return new RotationAnimation(
+            initialOffset, rotationAxis,
+            degreesPerTick, startGameTime, endGameTime,
+            timingFunction
+        );
+    }
+    
+    @Override
+    public @NotNull AnimationResult getAnimationResult(
+        long tickTime, float partialTicks, AnimationContext context
+    ) {
+        double passedTicks = ((double) (tickTime - 1 - startGameTime)) + partialTicks;
+        
+        boolean ended = false;
+        long durationTicks = endGameTime - startGameTime;
+        if (passedTicks >= durationTicks) {
+            ended = true;
+            passedTicks = durationTicks;
+        }
+        
+        if (timingFunction != null) {
+            passedTicks = timingFunction.mapProgress(passedTicks / durationTicks) * durationTicks;
+        }
+        
+        double angle = degreesPerTick * passedTicks;
+        DQuaternion rotation = DQuaternion.rotationByDegrees(rotationAxis, angle);
+        
+        Vec3 vec = initialOffset;
+        Vec3 rotatedVec = rotation.rotate(vec);
+        Vec3 offset = rotatedVec.subtract(vec);
+        
+        return new AnimationResult(
+            new DeltaUnilateralPortalState(
+                offset, rotation, null
+            ),
+            ended
+        );
+    }
+    
+    @Nullable
+    @Override
+    public DeltaUnilateralPortalState getEndingResult(long tickTime, AnimationContext context) {
+        if (endGameTime == Long.MAX_VALUE) {
+            // infinite animation, keep the current state when stopping
+            return null;
+        }
+        else {
+            return getAnimationResult(endGameTime, 0, context).delta();
+        }
+    }
+    
+    @Override
+    public PortalAnimationDriver getFlippedVersion() {
+        return new RotationAnimation(
+            initialOffset,
+            rotationAxis,
+            degreesPerTick,
+            startGameTime,
+            endGameTime,
+            timingFunction
+        );
+    }
+    
+    @Override
+    public Component getInfo() {
+        return Component.literal(
+            "Rotation[offset=(%.3f %.3f %.3f),axis=(%.3f %.3f %.3f),angVelo=%.3f]".formatted(
+                initialOffset.x, initialOffset.y, initialOffset.z,
+                rotationAxis.x, rotationAxis.y, rotationAxis.z,
+                degreesPerTick
+            )
+        );
+    }
+    
+    // generated by GitHub Copilot
+    public static class Builder {
+        private Vec3 initialOffset;
+        public Vec3 rotationAxis;
+        public double degreesPerTick;
+        public long startGameTime;
+        public long endGameTime;
+        public TimingFunction timingFunction;
+        
+        public RotationAnimation build() {
+            return new RotationAnimation(
+                initialOffset,
+                rotationAxis,
+                degreesPerTick,
+                startGameTime,
+                endGameTime,
+                timingFunction
+            );
+        }
+        
+        public Builder setInitialOffset(Vec3 initialOffset) {
+            this.initialOffset = initialOffset;
+            return this;
+        }
+        
+        public Builder setRotationAxis(Vec3 rotationAxis) {
+            this.rotationAxis = rotationAxis;
+            return this;
+        }
+        
+        public Builder setDegreesPerTick(double degreesPerTick) {
+            this.degreesPerTick = degreesPerTick;
+            return this;
+        }
+        
+        public Builder setStartGameTime(long startGameTime) {
+            this.startGameTime = startGameTime;
+            return this;
+        }
+        
+        public Builder setEndGameTime(long endGameTime) {
+            this.endGameTime = endGameTime;
+            return this;
+        }
+        
+        public Builder setTimingFunction(TimingFunction timingFunction) {
+            this.timingFunction = timingFunction;
+            return this;
+        }
+        
+    }
+    
+}

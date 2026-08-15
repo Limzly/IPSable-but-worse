@@ -1,0 +1,31 @@
+{
+  "required": true,
+  "package": "qouteall.imm_ptl.peripheral.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "plugin": "qouteall.imm_ptl.peripheral.IPPeripheralMixinPlugin",
+  "mixins": [
+    "common.alternate_dimension.IEChunkAccess_AlternateDim",
+    "common.alternate_dimension.IEChunkGenerator_AlternateDim",
+    "common.alternate_dimension.IENoiseGeneratorSettings",
+    "common.alternate_dimension.IENoiseRouterData",
+    "common.dfu.MixinItemStackComponentizationFix",
+    "common.dim_stack.MixinChunkStatusTasks_BedrockReplacement",
+    "common.dim_stack.MixinMinecraftServer_DimStack_CVB",
+    "common.end_portal.MixinEnderEyeItem_CVB",
+    "common.nether_portal.MixinAbstractFireBlock_CVB",
+    "common.nether_portal.MixinFlintAndSteelItem_CVB"
+  ],
+  "client": [
+    "client.MixinBossHealthOverlay_CVB",
+    "client.MixinSplashManager_CVB",
+    "client.alternate_dimension.MixinClientLevelData_CVB",
+    "client.alternate_dimension.MixinFogRenderer_A_CVB",
+    "client.dim_stack.MixinCreateWorldScreen_CVB",
+    "client.dim_stack.MixinCreateWorldScreenMoreTab_CVB",
+    "client.portal_wand.MixinDebugRenderer",
+    "client.portal_wand.MixinMinecraft_PortalWand"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

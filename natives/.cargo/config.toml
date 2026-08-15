@@ -1,0 +1,8 @@
+# IPSable local-dev change: upstream passes -Wl,-Brepro (reproducible builds) which the
+# rustup-bundled MinGW ld does not support; dev builds don't need byte-reproducibility.
+[target.x86_64-pc-windows-gnu]
+rustflags = []
+
+[target.x86_64-apple-darwin]
+# Required to avoid a rustc hang when building for this target.
+rustflags = ["-C", "codegen-units=2"]

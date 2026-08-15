@@ -1,0 +1,308 @@
+plugins {
+    id 'java-library'
+    id 'eclipse'
+    id 'idea'
+    id 'maven-publish'
+    id 'net.neoforged.gradle.userdev' version '7.0.165'
+    id 'net.neoforged.gradle.mixin' version '7.0.165'
+}
+
+apply plugin: 'java-library'
+apply plugin: 'eclipse'
+apply plugin: 'idea'
+apply plugin: 'maven-publish'
+apply plugin: 'net.neoforged.gradle.userdev'
+apply plugin: 'net.neoforged.gradle.mixin'
+
+// The archive carries the fork's version. The mod's *declared* version (what lands
+// in neoforge.mods.toml and what other mods' dependency ranges check against) stays
+// mod_version, expanded in ProcessResources below.
+version = "${fork_version}+ip-${mod_version}"
+group = mod_group_id
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+// Each repository is scoped (exclusiveContent) to the groups it actually serves,
+// so Gradle never probes the wrong host and resolution stays deterministic.
+repositories {
+    mavenLocal()
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = "Modrinth"
+                url = "https://api.modrinth.com/maven"
+            }
+        }
+        filter {
+            includeGroup "maven.modrinth"
+        }
+    }
+    exclusiveContent {
+        forRepository {
+            maven {
+                url "https://cursemaven.com"
+            }
+        }
+        filter {
+            includeGroup "curse.maven"
+        }
+    }
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = "CaffeineMC"
+                url = "https://maven.caffeinemc.net/releases"
+            }
+        }
+        filter {
+            includeGroup "net.caffeinemc"
+        }
+    }
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = "Sinytra"
+                url = "https://maven.su5ed.dev/releases"
+            }
+        }
+        filter {
+            includeGroupByRegex "org\\.sinytra.*"
+        }
+    }
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = "Create"
+                url = "https://maven.createmod.net"
+            }
+        }
+        filter {
+            includeGroup "com.simibubi.create"
+            includeGroup "net.createmod.ponder"
+            includeGroup "dev.engine-room.flywheel"
+        }
+    }
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = "IThundxr"
+                url = "https://maven.ithundxr.dev/snapshots"
+            }
+        }
+        filter {
+            includeGroup "com.tterrag.registrate"
+        }
+    }
+    exclusiveContent {
+        forRepositories(
+            mavenLocal(),
+            // Sable, its companion, Offroad, plus Create Aeronautics + Simulated
+            maven {
+                name = "RyanHCode"
+                url = "https://maven.ryanhcode.dev/releases"
+            }
+        )
+        filter {
+            // dev.ryanhcode.* (Sable core/rapier/companion) must resolve from
+            // maven.ryanhcode.dev for builds without a pre-populated mavenLocal;
+            // mavenLocal is listed first above, so local overrides still win.
+            includeGroupByRegex "dev\\.ryanhcode.*"
+            includeGroup "dev.eriksonn.aeronautics"
+            includeGroup "dev.simulated_team.simulated"
+        }
+    }
+    exclusiveContent {
+        forRepository {
+            // Veil (+ its glsl-processor / molang-compiler transitives), JEI
+            maven {
+                name = "BlameJared"
+                url = "https://maven.blamejared.com"
+            }
+        }
+        filter {
+            includeGroup "foundry.veil"
+            includeGroup "io.github.ocelot"
+            includeGroupByRegex "gg\\.moonflower.*"
+            includeGroup "mezz.jei"
+        }
+    }
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = "TheIllusiveC4"
+                url = "https://maven.theillusivec4.top"
+            }
+        }
+        filter {
+            includeGroupByRegex "top\\.theillusivec4.*"
+        }
+    }
+}
+
+base {
+    archivesName = archives_base_name
+}
+
+jarJar.enable()
+
+minecraft.accessTransformers.entry 'public net.minecraft.server.MinecraftServer storageSource'
+minecraft.accessTransformers.entry 'public net.minecraft.world.level.biome.BiomeManager biomeZoomSeed'
+minecraft.accessTransformers.entry 'public-f net.minecraft.util.profiling.ActiveProfiler WARNING_TIME_NANOS'
+minecraft.accessTransformers.entry 'public net.minecraft.server.level.ChunkMap$TrackedEntity'
+minecraft.accessTransformers.entry 'public net.minecraft.world.level.GameRules register(Ljava/lang/String;Lnet/minecraft/world/level/GameRules$Category;Lnet/minecraft/world/level/GameRules$Type;)Lnet/minecraft/world/level/GameRules$Key;'
+minecraft.accessTransformers.entry 'public net.minecraft.world.level.GameRules$BooleanValue create(Z)Lnet/minecraft/world/level/GameRules$Type;'
+minecraft.accessTransformers.entry 'public com.mojang.blaze3d.shaders.Program$Type getGlType()I'
+minecraft.accessTransformers.entry 'public-f net.minecraft.world.entity.Entity getBoundingBox()Lnet/minecraft/world/phys/AABB;'
+
+minecraft.accessTransformers.entry 'public net.minecraft.client.renderer.chunk.SectionRenderDispatcher$RenderSection$CompileTask'
+minecraft.accessTransformers.entry 'public-f net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator'
+minecraft.accessTransformers.entry 'public net.minecraft.resources.RegistryDataLoader$Loader'
+minecraft.accessTransformers.entry 'public net.minecraft.client.gui.screens.worldselection.CreateWorldScreen$MoreTab'
+minecraft.accessTransformers.entry 'public net.minecraft.client.multiplayer.ClientChunkCache emptyChunk'
+minecraft.accessTransformers.entry 'public net.minecraft.client.multiplayer.ClientChunkCache lightEngine'
+minecraft.accessTransformers.entry 'public net.minecraft.client.multiplayer.ClientChunkCache storage'
+minecraft.accessTransformers.entry 'public net.minecraft.client.multiplayer.ClientChunkCache level'
+
+minecraft.accessTransformers.entry 'public net.minecraft.world.entity.EntityType$Builder dimensions'
+
+minecraft.accessTransformers.entry 'public net.minecraft.util.datafix.fixes.ItemStackComponentizationFix$ItemStackData'
+
+/*sourceSets {
+    main {
+        java {
+            srcDir "src/main/java"
+        }
+        resources {
+            srcDir "src/main/resources"
+        }
+    }
+}*/
+
+runs {
+    configureEach {
+        systemProperty 'forge.logging.markers', 'REGISTRIES'
+
+        systemProperty 'forge.logging.console.level', 'debug'
+
+        modSource project.sourceSets.main
+    }
+
+    client {
+        systemProperty 'forge.enabledGameTestNamespaces', project.mod_id
+    }
+
+    server {
+        systemProperty 'forge.enabledGameTestNamespaces', project.mod_id
+    }
+
+    gameTestServer {
+        systemProperty 'forge.enabledGameTestNamespaces', project.mod_id
+    }
+
+    data {
+        getArguments().addAll '--mod', project.mod_id, '--all', '--output', file('src/generated/resources/').getAbsolutePath(), '--existing', file('src/main/resources/').getAbsolutePath()
+    }
+}
+
+// Include resources generated by data generators.
+sourceSets.main.resources { srcDir 'src/generated/resources' }
+
+// The locally supplied patched Rapier DLL is packaged where IplNativesOverrideMixin
+// loads it from. Keep the binary at the project root for easy replacement.
+processResources {
+    from('sable_rapier_x86_64_windows.dll') {
+        into 'natives_ipl'
+    }
+}
+
+mixin {
+    configs.add("imm_ptl_peripheral.mixins.json")
+    configs.add("q_misc_util.mixins.json")
+    configs.add("imm_ptl.mixins.json")
+    configs.add("imm_ptl_compat.mixins.json")
+    configs.add("imm_ptl_fabric.mixins.json")
+}
+
+dependencies {
+    implementation "net.neoforged:neoforge:${neo_version}"
+
+    // Sodium 0.8+ publishes native NeoForge artifacts. The release jar players
+    // install JiJ-bundles the Forgified Fabric API modules below; the dev
+    // environment uses the unbundled -mod artifact, so they're declared here.
+    // (FFAPI is Sinytra's native NeoForge port of Fabric API - no Connector.)
+    implementation "net.caffeinemc:sodium-neoforge-mod:${sodium_version}+mc${minecraft_version}"
+    implementation "net.caffeinemc:sodium-neoforge-api:${sodium_version}+mc${minecraft_version}"
+    implementation "net.caffeinemc:sodium-neoforge:${sodium_version}+mc${minecraft_version}"
+    implementation "org.sinytra.forgified-fabric-api:fabric-api-base:0.4.42+d1308ded19"
+    implementation "org.sinytra.forgified-fabric-api:fabric-block-view-api-v2:1.0.11+e9036fd419"
+    implementation "org.sinytra.forgified-fabric-api:fabric-rendering-data-attachment-v1:0.3.49+73761d2e19"
+    implementation "org.sinytra.forgified-fabric-api:fabric-renderer-api-v1:3.4.1+9125b6dc19"
+    implementation "maven.modrinth:iris:1.8.14-beta.1+1.21.1-neoforge"
+
+    implementation "maven.modrinth:cloth-config:15.0.140+neoforge"
+    implementation "maven.modrinth:pehkui:3.8.3+1.21-neoforge"
+
+    // The Aether
+    implementation "maven.modrinth:owo-lib:0.12.15-beta.12+1.21"
+    implementation "maven.modrinth:aether:1.21.1-1.5.1-beta.4-neoforge"
+
+//    // Confluence: Otherworld
+//    implementation "maven.modrinth:confluence:1.1.3"
+//    implementation "maven.modrinth:curios:9.5.1+1.21.1"
+
+//    // Camol
+//    implementation "curse.maven:camol-1214396:6337020"
+
+    // Oritech
+    implementation "maven.modrinth:oritech:1.2.6-neoforge"
+    implementation "maven.modrinth:architectury-api:13.0.8+neoforge"
+    implementation "maven.modrinth:geckolib:4.7.7-neoforge"
+    implementation "maven.modrinth:athena-ctm:4.0.6-neoforge"
+
+    // Create ("slim" = no bundled deps, so Ponder/Flywheel/Registrate are declared
+    // explicitly; in release jars they arrive via Create's JarInJar)
+    implementation("com.simibubi.create:create-${minecraft_version}:${create_version}:slim") { transitive = false }
+    implementation "net.createmod.ponder:ponder-neoforge:${ponder_version}+mc${minecraft_version}"
+    implementation "dev.engine-room.flywheel:flywheel-neoforge-${minecraft_version}:${flywheel_version}"
+    implementation "com.tterrag.registrate:Registrate:${registrate_version}"
+
+    // Sable 2.0.3 release and its bundled Rapier/companion/Veil payloads.
+    // Maven coordinates for these GitHub projects do not exist on JitPack.
+    implementation "dev.ryanhcode.sable:sable-neoforge-${minecraft_version}:${sable_version}"
+    implementation "dev.ryanhcode.sable:sable-sable_rapier-${minecraft_version}:${sable_version}"
+    implementation "dev.ryanhcode.sable-companion:sable-companion-common-${minecraft_version}:${sable_companion_version}"
+    implementation "foundry.veil:veil-neoforge-${minecraft_version}:${veil_version}"
+    implementation "dev.simulated_team.simulated:simulated-neoforge-${minecraft_version}:${aeronautics_version}"
+
+    // Create Aeronautics + Simulated + Offroad (released in lockstep, one version)
+    implementation "dev.eriksonn.aeronautics:aeronautics-neoforge-${minecraft_version}:${aeronautics_version}"
+    implementation "dev.ryanhcode.offroad:offroad-neoforge-${minecraft_version}:${aeronautics_version}"
+
+    // Mekanism
+    implementation "maven.modrinth:mekanism:10.7.14.79"
+}
+
+tasks.named('build').configure { dependsOn('jarJar') }
+
+// This block of code expands all declared replace properties in the specified resource targets.
+// A missing property will result in an error. Properties are expanded using ${} Groovy notation.
+// When "copyIdeResources" is enabled, this will also run before the game launches in IDE environments.
+// See https://docs.gradle.org/current/dsl/org.gradle.language.jvm.tasks.ProcessResources.html
+tasks.withType(ProcessResources).configureEach {
+    var replaceProperties = [
+            minecraft_version   : minecraft_version, minecraft_version_range: minecraft_version_range,
+            neo_version         : neo_version, neo_version_range: neo_version_range, issue_tracker_url: issue_tracker_url,
+            loader_version_range: loader_version_range,
+            mod_id              : mod_id, mod_name: mod_name, mod_license: mod_license, mod_version: mod_version, fork_version: fork_version,
+            mod_authors         : mod_authors, mod_description: mod_description, pack_format_number: pack_format_number,
+    ]
+    inputs.properties replaceProperties
+
+    filesMatching(['META-INF/neoforge.mods.toml', 'pack.mcmeta']) {
+        expand replaceProperties + [project: project]
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
+}
