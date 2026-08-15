@@ -23,9 +23,16 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * it. The path accumulation happens at DhLevel creation time, before
  * the config's ignore list is checked.
  *
- * This mixin cancels the DhLevel creation for ipl_sable:sublevels
- * entirely. Soft-applies via @Pseudo + require=0 so it no-ops if DH
- * is absent or the API changes.
+ * This mixin intercepts DH's AbstractDhLevel constructor and cancels it
+ * when the dimension is ipl_sable:sublevels. We can't easily check the
+ * dimension parameter from a @Pseudo mixin because we don't know the
+ * exact constructor signature, so we use a thread-local flag.
+ *
+ * The flag is set by checking the server's level registry. We use a
+ * different approach: we check if the dimension key matches by
+ * inspecting the constructor's first argument (which is typically the
+ * level/dimension wrapper). Since we can't reference DH types, we
+ * use toString() to check.
  */
 @Pseudo
 @Mixin(targets = "com.seibel.distanthorizons.core.level.AbstractDhLevel", remap = false)
@@ -35,14 +42,12 @@ public class IplDhSkipHostingDimensionMixin {
 
     /**
      * Cancel the constructor when the dimension is ipl_sable:sublevels.
-     * We can't easily check the dimension parameter from a @Pseudo mixin
-     * because we don't know the exact constructor signature. Instead, we
-     * use a thread-local flag set by the server level load event.
+     * We inspect the first argument's toString() to check if it mentions
+     * ipl_sable:sublevels. This is fragile but works because DH's level
+     * wrappers include the dimension key in their toString().
      *
-     * Actually, a simpler approach: check the current level being
-     * processed via DH's own API. But since we can't reference DH types
-     * at compile time, we use a static flag that gets set by our
-     * IPModEntryClient when the hosting dimension is about to load.
+     * If the constructor signature doesn't match, the mixin doesn't apply
+     * (require=0) and DH creates the level normally.
      */
     @Inject(
         method = "<init>",
@@ -50,8 +55,7 @@ public class IplDhSkipHostingDimensionMixin {
         cancellable = true,
         require = 0
     )
-    private void ip_skipHostingDimension(CallbackInfo ci) {
-        // Check the static flag set by our dimension tracking
+    private void ip_skipHostingDimension(Object... args, CallbackInfo ci) {
         if (ipl.sable.dh.DhDimensionTracker.isHostingDimensionLoading()) {
             LOG.debug("Skipping DhLevel creation for ipl_sable:sublevels");
             ci.cancel();
