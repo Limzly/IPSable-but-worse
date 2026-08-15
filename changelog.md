@@ -1,99 +1,45 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.  
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project tries to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+This is a fork of IPSable for the Create Convoluted modpack. It's indev — things break, things change, no promises on version numbers meaning anything yet.
 
-## [Unreleased Changes]
+## indev
 
-Atlas hardening since the 0.5.0 merge (PR #15):
+First consolidated state of this fork. Squashes the previous 0.6.0–0.6.7 commits into one entry.
 
-### Fixed
+### What works
 
-- Multi-portal straddle: contact clipping is aperture-bounded again — the 0.5.0
-  full-plane clip let two sessions' half-spaces swallow a ship, and parts beside a
-  free-standing frame lost ground collision.
-- Ships whose parent dimension is unloaded (e.g. a nether ship while everyone is in
-  the overworld) fell through the world. They now go dormant (native Fixed body,
-  zero tick cost) and wake in place when a player loads the area; no chunks are
-  force-loaded.
-- Ships in different parent dimensions collided when their coordinates overlapped
-  (per-body parent-frame check in the native dispatcher).
-- Connected ships got stuck on the wrong logical side of a portal: the per-member
-  transit gate deadlocked once the first member crossed (gate removed).
-- A roped partner no longer teleports through together with the crossing ship.
-- Modded packet handlers resolve hosted-ship positions correctly: deferred
-  world-frames wrap payload dispatch, arming on first hosted-plot resolution
-  (fixes Simulated assembly interactions and Photomancy blueprint capture).
-- Disassembly desync: block-restore notifications on a hosted ship routed to the
-  hosting level (no chunk holder) and vanished; the client never saw the ship
-  turn back into blocks.
-- Teleports targeting the hosting dimension (e.g. Waystones placed on ships)
-  redirect to the ship's parent dimension; Waystones' own distance check resolves
-  ship-frame waystone positions through the delegate dimension.
-- Entities parked at plot coordinates in a parent level (Simulated's ship-attached
-  plungers) were garbage-collected by vanilla's entity-chunk unload within
-  seconds, orphaning their physics joints. Three layers: plot-ticking memberships
-  ignore the id-aliased client copy (vanilla Entity.equals compares by id, so
-  singleplayer client lerps corrupted server state), plot-parked entities are
-  exempt from chunk store/unload (player semantics), and entity-chunk visibility
-  downgrades on live plot chunks re-assert ENTITY_TICKING.
-- Client copies of plot-parked entities never ticked (no real parent client chunk
-  at plot coordinates), freezing attach animations and orientation — the plunger's
-  rope spline rendered permanently mid-connect. The client now mirrors the server's
-  plot-chunk entity-ticking bridge.
-- Plunger rope visuals: paired plungers no longer draw their rope to the world
-  origin when the partner's client entity is transiently missing (Simulated zeroes
-  its synced target client-side every tick; the synced value is restored), and
-  client-side kicks through a not-yet-synced sub-level pose are skipped instead of
-  teleporting the entity to ~(0,0,0).
+- **Game boots** with IP + Sable + DH + Iris + Sodium + Veil + Flywheel all loaded together — no crash on launch (the original IP+Sable collision is fixed upstream by IPSable)
+- **Sound Physics log spam** — `MixinBlockGetter` was logging a full stack trace every time a sound mod raycast crossed a portal boundary; now logs a one-line warning. The 30-block clamp behavior is unchanged.
+- **DH render-setup error spam** — the `@Pseudo` mixin on DH's `OverrideInjector.bind` stops ~15,000 `IllegalStateException` errors per session from Iris's `LodRendererEvents$12` re-registering its handler on every portal render re-entry.
+- **Cross-portal lighting** — the lightmap is now always updated when switching dimensions for portal rendering. Previously cached dimensions reused a stale lightmap, causing wrong brightness and sky color to leak through.
+- **Auto-enable compatibility render mode** when Iris + DH are both detected — uses `IrisCompatibilityPortalRenderer` instead of the normal `IrisPortalRenderer` to avoid the GL Error 1281 cascade that breaks shaders.
+- **DH config patch** — patches `DistantHorizons.toml` at startup to add `ipl_sable:sublevels` to `ignoredDimensionCsv`, attempting to prevent DH's data path accumulation across dimensions. Requires a relaunch to take effect.
 
-### Changed
+### What doesn't work yet (honest status)
 
-- Rigid assemblies (swivel bearings, fixed couplings — joints locking an angular
-  axis) cross portals atomically as one unit.
-- Ropes span portals: a crossed ship's rope routes through the aperture and pulls
-  the trailing body toward it; the chain follows once both ends cross, and backing
-  out unwinds. Ropes overstretched past 1.75× natural length (snagged trailing
-  body, cross-dimension splits) break, vanilla-lead-style.
+These are the remaining bugs. My previous attempts at fixing them (depth clears, FB restores, pipeline nulling, clip adjustment changes) either didn't help or made things worse, so they've been reverted. The rendering pipeline is back to upstream IPSable's behavior — only the lightmap fix and the compat-mode auto-enable are kept.
 
-### Known Issues
+- **Shadow stripes** — 5-7 block thick bands of broken lighting across terrain near portals, spaced 3-5 blocks apart. Not classic z-fighting. Likely related to how the clip plane interacts with the chunk grid or how the clip equation is uploaded per-shader. Needs deeper investigation.
+- **Ghost terrain** — small sections (5×8×5 or larger) of the wrong dimension render through, with broken lighting. Likely a clip equation timing issue where some shaders get a zeroed uniform.
+- **Shaders + portals** — Iris shaderpacks don't fully cooperate with the portal re-render path. The portal surface can be visible through solid blocks when shaders are on.
+- **DH data collision** — DH's `LocalSaveStructure` accumulates data paths across dimensions. The config patch attempts to work around it but the underlying issue is architectural: IPSable's hosting dimension model confuses DH's per-dimension data model. The config patch needs a relaunch and may not fully fix the issue.
+- **Portal visible through blocks with shaders** — new bug. The portal surface renders on top of solid terrain when a shaderpack is active. Likely a depth buffer management issue in the compatibility renderer's interaction with Iris's depth passes.
 
-- Rare missed rope re-unification when both ends cross the same portal within a
-  tick (diagnostics in place).
+### What I reverted (didn't work)
 
-## [6.0.7] - 2025-06-18
+These changes were tried in v0.6.5–v0.6.7 and didn't fix the issues. Reverted to avoid introducing new bugs:
 
-### Fixed
+- `glClear(GL_DEPTH_BUFFER_BIT)` before rendering portal destination content — didn't fix invisible terrain; may have caused depth-related issues
+- Deferred→main FB blit after each portal — didn't fix ghost blocks; may have caused flickering
+- Removed `setPipeline(worldRenderer, null)` — didn't fix black screen; may have caused portal-visible-through-blocks
+- Increased `FrontClipping.ADJUSTMENT` from 0.01 to 0.1 — didn't fix shadow stripes
 
-- Oritech animations not displaying ([#13](https://github.com/iPortalTeam/ImmersivePortalsModForNeo/issues/13)).
-- ComputerCraft monitors not displaying anything ([#31](https://github.com/iPortalTeam/ImmersivePortalsModForNeo/issues/31)).
+### Config + metadata
 
-## [6.0.6] - 2024-12-22
+- Fixed `mod_group_id` (was `com.example.examplemod`, leftover NeoForge template cruft)
+- Updated authors, issue tracker URL, description to point at this fork
+- Added `BUILD.md` with JDK 21 setup instructions
 
-### Updated
+## Upstream history
 
-- Sync upstream (v6.0.6)
-- Sodium compat (v0.6.0)
-- Iris compat (v1.8.0) (experimental)
-
-### Fixed
-
-- Default config values being wrong
-
-## [6.0.3] - 2024-10-20
-
-### Added
-
-- Initial port to NeoForge 1.21.1
-
-### Known Issues
-
-- Iris compatibility is not fully functional
-- Crash with SecurityCraft
-
-[Unreleased Changes]: https://github.com/iPortalTeam/ImmersivePortalsModForNeo/compare/v6.0.7...HEAD
-[6.0.7]: https://github.com/iPortalTeam/ImmersivePortalsModForNeo/releases/tag/v6.0.7
-[6.0.6]: https://github.com/iPortalTeam/ImmersivePortalsModForNeo/releases/tag/v6.0.6
-[6.0.3]: https://github.com/iPortalTeam/ImmersivePortalsModForNeo/releases/tag/v6.0.3
-
+This fork builds on top of upstream IPSable. See upstream's changelog for everything before `fork-baseline-v0.5.0` (commit `f5e0471`).

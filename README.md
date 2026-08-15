@@ -1,84 +1,75 @@
-# v0.5.0
-1) Better Sodium compatibility (same dimension + recursion stuff).
-2) Fixed clipping-through-walls: it used to stop at portal size. Now it doesn’t. Ever.
-3) HUGE amount of rendering bug fixes.
-5) Portal something sub-level mesh bug with empty triangles was fixed; Small sub-level part behind a portal was removed. 
-6) Full rewrite of how we store sub-levels in another dimension.
-7) Portals on sub-levels.
-8) A small 0.01 z-fighting offset was compensated (0.01 pixel visual gap).
-9) Breaking sub-level into 2 pieces works again.
-10) Multi-part global blocks (e.g., swivel bearings, wheels, springs) are working again (WIP).
-11) One-block sub-levels are visible again.
-12) New “Physics Staff” mixin, works with recursion (still kinda WIP).
-13) New, portals now have colliders.
-14) New, connected sub-levels (with blocks like bearing, springs, ropes) work through portals. 
+# IPSable-but-worse
 
-# Immersive Portals × Sable Compatibility Fork
-Version: NeoForge 1.21.1; Targets: Sable 2.0.3+ · Create Aeronautics 1.3.0+ · Create 6.0.10
+A fork of [IPSable](https://github.com/r2smith141/IPSable) (which itself is a fork of [Immersive Portals for NeoForge](https://github.com/iPortalTeam/ImmersivePortalsModForNeo)) that tries to make Immersive Portals work with Sable physics in the [Create Convoluted](https://modrinth.com/modpack/create-convoluted) modpack.
 
-This is a fork of Immersive Portals for people that want Sable + physics-sublevels + (maybe) Aeronautics
-and got tired of portals working like shit.
+**Status: indev.** This does not fully work yet. It boots, it doesn't crash, portals render, but there are still visual bugs (shadow stripes, ghost terrain, shaders fighting the portal rendering). I'm working through them.
 
-Goal: ships (and other physics-assembled sub-levels) can:
-- render correctly when they’re halfway through a portal (clipped at the frame, both sides)
-- keep working physics on both sides while straddling
-- move through dimensions as one continuous motion (not a hard teleport)
-- have portals on sub-levels, bound to them like a monolith
-- portals can traverse through protals
+## What this is
 
-Not a general IP release. It’s experimental, and built for this stack, with love.
+The Create Convoluted modpack needs three things to coexist:
+- **Immersive Portals** — see-through portals, seamless dimension travel
+- **Sable** — physics-based moving structures (airships, etc), required by Create Aeronautics
+- **Distant Horizons** — LOD rendering for distant terrain
 
-Upstream IP (NeoForge): https://github.com/iPortalTeam/ImmersivePortalsModForNeo
-Sable: https://github.com/ryanhcode/sable
+The stock mods don't get along. Immersive Portals and Sable both hook the same entity collision mixin and crash on launch. IPSable (upstream) fixes that crash by forking Immersive Portals itself and rewiring how sub-levels interact with portals. This fork takes IPSable and adds the modpack-specific compatibility glue for Iris shaders, Distant Horizons, and the rest of the Create Convoluted stack.
 
-# What’s the trick?
-Sable normally “hides” each sub-level by shoving its blocks far away inside a dimension.
-IP is like “cool, I’m rendering/simulating multiple dimensions anyway.”
+## What works
 
-So this fork basically says:
-- sub-level blocks live ONCE in a dedicated hosting dimension: `ipl_sable:sublevels`
-- “parent dimension” is just metadata (where the ship *belongs* / which physics scene owns it)
+- Game boots with IP + Sable + DH + Iris + Sodium + Veil + Flywheel all loaded together
+- No crash on launch (the original IP+Sable collision is fixed upstream by IPSable)
+- Portals render and you can walk through them
+- Cross-portal physics (Sable sub-levels straddle portals) — upstream IPSable work
+- Sound Physics mods no longer spam the log with raycast errors
+- DH's render-setup handler no longer throws 15,000+ exceptions per session
 
-Then we glue the rest together:
-- Rendering: straddling ships draw in both dimensions, clipped cleanly at the portal plane.
-- Physics: each dimension gets its own Rapier scene. A straddling ship gets a clone body on the other side,
-  pinned every substep, and the solver’s corrections get copied back.
-  Also: contacts get clipped at the portal aperture (requires patched natives; see below).
-- Transit: crossing the plane flips the ship’s parent + remaps pose through the portal. No block copying.
-- Interaction: targeting/outlines/break/place/redstone/BE logic and cross-portal manipulation work on ship blocks.
-  Also the physics staff can grab/drag through the mess.
+## What doesn't work yet
 
-Deep nerd notes live in: `REFACTOR_SPEC.md`
+These are the things I'm still fighting:
 
-# What works
-- Hosted sub-levels save/load correctly in any dimension.
-- Portal straddle rendering (including portals-in-portals).
-- Straddle physics: the “through” part collides with the destination world like it actually exists there.
-  Standing/walking/riding on the through-part behaves like it should (including friction).
-- Block interaction on through-part: break/place + outlines + prediction + redstone + pistons + block entities.
-- Create stuff on ships (drills/deployers/etc) can interact with the parent world (world-frame routing).
-- Physics staff: lock/drag works on the through-part from either side.
-- Dimension stack seams: IP vertical stacking portals behave (scaled/inverted stacks: transit works).
+- **Shadow stripes** — z-fighting from the clip plane, shows up as bands of broken lighting across terrain near portals
+- **Ghost terrain** — small sections of the wrong dimension render through, with broken lighting
+- **Shaders + portals** — Iris shaderpacks don't fully cooperate with the portal re-render path
+- **Portal visible through blocks** — with shaders on, the portal surface can show through solid terrain
+- **Distant Horizons data collision** — DH accumulates data paths across dimensions because of the IPSable hosting dimension model. There's a config patch that tries to work around it but it needs a relaunch to take effect
 
-# Known limitations
-- Performance (Sub Level stuttering)
-- DH + Voxy Support
-- Bugs
+If you want to help, grab the latest build, test it, and tell me what breaks.
 
-# Build
-NeoForge 1.21.1, JDK 21: `./gradlew jarJar` → jar in `build/libs/`
+## Target stack
 
-Patched physics natives live under `natives/` (Sable Rust workspace fork + aperture clipping extension + atlas approach).
-Windows x86_64 build script: `natives/build-windows.ps1`
-If you don’t build natives, mod still runs — you just lose aperture contact clipping.
+| Mod | Version |
+|---|---|
+| Minecraft | 1.21.1 |
+| NeoForge | 21.1.228 |
+| Sable | 2.0.3+ |
+| Create | 6.0.10 |
+| Create Aeronautics | 1.3.0+ |
+| Sodium | 0.8.12+ |
+| Iris | 1.8.14-beta.1 |
+| Distant Horizons | 3.2.0-b |
+| Veil | 4.1.4 |
+| Flywheel | 1.0.6 |
 
-# About Immersive Portals (upstream)
-Immersive Portals does see-through portals, portals-in-portals, seamless teleportation, and non-euclidean weirdness.
-If you like this fork, please consider starring the upstream project too — they did the heavy lifting.
+## Building
 
-- CurseForge: https://www.curseforge.com/minecraft/mc-mods/immersive-portals-mod
-- Modrinth:  https://modrinth.com/mod/immersiveportals
-- Website:   https://qouteall.fun/immptl/
-- Wiki:      https://qouteall.fun/immptl/wiki/
+You need **JDK 21** (not 24+, not 25 — Gradle 8.10.2 doesn't support them). See [BUILD.md](BUILD.md) for setup instructions and common errors.
 
-![immptl.png](https://i.loli.net/2021/09/30/chHMG45dsnZNqep.png)
+```bash
+git clone https://github.com/Limzly/IPSable-but-worse.git
+cd IPSable-but-worse
+./gradlew jarJar --no-daemon
+```
+
+The jar ends up in `build/libs/`.
+
+## Credits
+
+- **qouteall** — original Immersive Portals author
+- **iPortalTeam** — NeoForge port maintainers
+- **r2smith141** — IPSable fork (Sable physics compat)
+- **GaMiR9195** — IPSable contributor
+- **ryanhcode** — Sable physics mod
+- **Limzly** (me) — this fork's mess
+
+## License
+
+Apache-2.0, same as upstream IPSable and Immersive Portals.

@@ -246,9 +246,11 @@ public class MyGameRenderer {
         IrisInterface.invoker.setPipeline(worldRenderer, null);
         
         //update lightmap
-        if (!RenderStates.isDimensionRendered(newDimension)) {
-            helper.lightmapTexture.updateLightTexture(0);
-        }
+        // Always update the lightmap when switching dimensions for portal
+        // rendering. Previously this was gated on !RenderStates.isDimensionRendered,
+        // which meant cached dimensions reused a stale lightmap → inconsistent
+        // lighting (wrong brightness, wrong sky color leaking through).
+        helper.lightmapTexture.updateLightTexture(0);
         
         //invoke rendering
         invokeWrapper.accept(() -> {

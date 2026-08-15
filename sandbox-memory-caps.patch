@@ -1,0 +1,33 @@
+--- a/gradle.properties
++++ b/gradle.properties
+@@ -1,4 +1,6 @@
+ # Done to increase the memory available to gradle.
+-org.gradle.jvmargs=-Xmx6G
++# Sandbox: capped to 2g (host has 4g RAM, no swap, OOM killer is aggressive).
++# Upstream default was -Xmx6G which is fine for dev workstations but triggers OOM here.
++org.gradle.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=512m -XX:+HeapDumpOnOutOfMemoryError
+ 
+ org.gradle.parallel=false
+--- a/build.gradle
++++ b/build.gradle
+@@ -307,3 +307,16 @@
+ tasks.withType(JavaCompile).configureEach {
+     options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
+ }
++
++// Cap memory for forked JVM processes (NeoGradle decompile/recompile tasks).
++// Sandbox-safe; upstream doesn't set this so NeoGradle's defaults can balloon
++// during :neoFormDecompile and trigger OOM on memory-constrained hosts.
++// Remove if your dev machine has more headroom.
++tasks.withType(JavaExec).configureEach {
++    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
++    maxHeapSize = '1500m'
++    jvmArgs '-XX:MaxMetaspaceSize=384m', '-XX:+UseG1GC'
++}
++
++// Cap NeoGradle's Vineflower decompiler memory (defaults to 4g, OOMs this sandbox).
++subsystems {
++    decompiler {
++        maxMemory = '1024m'
++    }
++}

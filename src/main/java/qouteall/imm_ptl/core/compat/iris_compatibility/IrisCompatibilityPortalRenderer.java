@@ -6,6 +6,8 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 import org.lwjgl.opengl.GL11;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import qouteall.imm_ptl.core.CHelper;
 import qouteall.imm_ptl.core.compat.IPPortingLibCompat;
 import qouteall.imm_ptl.core.portal.Portal;
@@ -23,6 +25,8 @@ import java.util.List;
 import static org.lwjgl.opengl.GL11.GL_STENCIL_TEST;
 
 public class IrisCompatibilityPortalRenderer extends PortalRenderer {
+    
+    private static final Logger LOG = LoggerFactory.getLogger("ipl-compat-renderer");
     
     public static final IrisCompatibilityPortalRenderer instance = new IrisCompatibilityPortalRenderer(false);
     public static final IrisCompatibilityPortalRenderer debugModeInstance =
