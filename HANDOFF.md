@@ -25,9 +25,9 @@ Look at their modpack page for voice reference.
 
 - Fork URL: https://github.com/Limzly/IPSable-but-worse
 - Upstream: https://github.com/r2smith141/IPSable (branch: default)
-- Working copy location in sandbox: /home/z/my-project/ipsable-fork
+- Working copy location in sandbox: /home/z/my-project/IPSable-but-worse
 - Baseline tag: fork-baseline-v0.5.0 (marks upstream IPSable v0.5.0, commit f5e0471)
-- Current HEAD: commit 787919d (indev, no version tags)
+- Current HEAD: docs commit 5e6b0a8 (parent 787919d, the latest fixes)
 - Branch: default (same as upstream)
 
 ### SSH ACCESS FOR PUSHING
@@ -90,7 +90,7 @@ git pull
 ./gradlew jarJar --no-daemon
 ```
 
-The jar is at: build/libs/immersive-portals-sable-compat-0.6.0+ip-6.0.7.jar
+The jar is at: build/libs/immersive-portals-sable-compat-0.6.8+ip-6.0.7.jar
 
 ---
 
@@ -155,13 +155,37 @@ Dark Loading Screen, Farmer's Respite. These were disabled to reduce conflicts.
 
 8. **Bug 4: Shadow stripes** (FrontClipping.java + IplProgramBindHook.java)
    - Added refreshClipEquationForCurrentCamera() method
-   - Re-computes the camera-relative clip equation on every shader bind
+   - Re-computes BOTH world-space and eye-space clip equations on every shader bind
    - Root cause: equation is camera-relative but only uploaded per shader bind
+   - Uses RenderSystem.getModelViewMatrix() to refresh the eye-space equation too
 
 9. **Bug 7: DH data collision** (IplDhSkipHostingDimensionMixin + IplServerLevelDhTrackerMixin + DhDimensionTracker)
-   - @Pseudo mixin cancels AbstractDhLevel constructor for ipl_sable:sublevels
-   - Flag set by ServerLevel mixin at RETURN (can't use HEAD, requires static handler)
-   - Flag auto-clears after 1 second
+   - @Pseudo mixin cancels DhServerWorld.getOrLoadLevel + DhClientServerWorld.getOrLoadLevel for ipl_sable:sublevels
+   - Previous attempt cancelled AbstractDhLevel.<init> but mixin silently failed (cancellable=true on a constructor throws InvalidInjectionException, swallowed by require=0). Replaced with proper getOrLoadLevel mixin.
+   - Flag set by ServerLevel mixin at RETURN (can't use HEAD because this is uninitializedThis before super())
+   - Whole chain is synchronous on the server thread; 1-second deadline is a safety net only
+
+### Additional fixes in 0.6.8 (commit pending)
+
+10. **Bug A: IplGlUseProgramProbeMixin deduplication**
+    - Was: ~200 lines of inlined bind logic that missed the Bug 2 + Bug 4 fixes
+    - Now: thin delegator that calls IplProgramBindHook.onBind(program)
+    - Effect: Bug 2 + Bug 4 fixes now apply uniformly to ALL program bind paths (vanilla terrain + Iris + Flywheel)
+
+11. **Bug B: Slot 2 (ipl_subLevelClipEquation[1]) write in IplProgramBindHook**
+    - Was: only IplGlUseProgramProbeMixin wrote slot 2; IplProgramBindHook didn't
+    - Now: IplProgramBindHook writes slot 2 too, plus the no-clip sentinel for slot 2 in the early-return path
+    - Effect: multi-straddle portals (portals inside portals) clip correctly for all programs
+
+12. **Bug C: refreshClipEquationForCurrentCamera now also refreshes eye-space equation**
+    - Was: only refreshed world-space equation (sufficient for terrain, stale for entities)
+    - Now: uses RenderSystem.getModelViewMatrix() to also refresh activeClipPlaneAfterModelView
+    - Effect: entity / particle / block-entity shaders no longer get stale clip equations
+
+13. **Bug N: IPL$SLOT1_FLIP diagnostic moved to IplProgramBindHook**
+    - Was: only applied to ProgramManager.glUseProgram path, not _glUseProgram path
+    - Now: applies uniformly to all bind paths
+    - Effect: -Dipl.sable.clip.slot1Flip=true diagnostic now consistent across paths
 
 ### What does NOT work yet
 
@@ -273,9 +297,11 @@ Water color comes from BiomeColors.getAverageWaterColor() which is dimension-spe
 MyGameRenderer swaps level/renderer/camera but NOT BlockColors or biome resolver
 
 ### Bug 7: DH data collision
-Status: FIX APPLIED (commit 787919d), untested
-Root cause: DH LocalSaveStructure accumulates data paths from all dims
-Fix: cancel AbstractDhLevel constructor for ipl_sable:sublevels
+Status: FIX APPLIED (commit 787919d, REWRITTEN for correctness), untested
+Root cause: DH creates a DhLevel for ipl_sable:sublevels which pollutes per-dim caches
+Fix: @Pseudo mixin cancels getOrLoadLevel on DhServerWorld + DhClientServerWorld when DhDimensionTracker flag is set. Returns null - safe because ServerApi.serverLevelLoadEvent pops the return value without dereferencing it.
+Previous attempt: @Pseudo mixin on AbstractDhLevel.<init> with cancellable=true. Mixin refuses to apply cancellable injections on constructors (InvalidInjectionException), silently swallowed by require=0. The mixin never applied. Replaced.
+Note: original "LocalSaveStructure accumulates paths" claim was inaccurate. DH uses per-dim ConcurrentHashMap caches, not path accumulation. But the fix (skip DhLevel creation for hosting dim) still prevents the issue.
 
 ---
 

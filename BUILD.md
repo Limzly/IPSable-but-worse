@@ -151,7 +151,7 @@ After a successful build, the jar is at:
 build/libs/immersive-portals-sable-compat-<fork_version>+ip-<mod_version>.jar
 ```
 
-For v0.6.0, that's `immersive-portals-sable-compat-0.6.0+ip-6.0.7.jar`.
+For v0.6.8, that's `immersive-portals-sable-compat-0.6.8+ip-6.0.7.jar`.
 
 Drop this jar into your Minecraft instance's `mods/` folder. It replaces
 both:

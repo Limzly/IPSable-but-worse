@@ -62,16 +62,29 @@ public final class DhConfigPatch {
     /**
      * Patches the DH config file to ignore the IPSable hosting dimension.
      *
+     * <p>Return value semantics for the retry mechanism:
+     * <ul>
+     *   <li>{@code true} — config is in the desired state (either we patched
+     *       it just now, or the hosting dim was already in the CSV, or DH
+     *       is present but the config format has changed in a way we can't
+     *       parse — no point retrying).</li>
+     *   <li>{@code false} — DH config file doesn't exist yet. Caller should
+     *       schedule a retry (DH creates the config on its first init,
+     *       which may happen after our onInitializeClient hook).</li>
+     * </ul>
+     *
      * @param configDir The Minecraft instance's config directory
      *                  (typically {@code .minecraft/config}).
+     * @return {@code true} if no further retries are needed, {@code false}
+     *         if the caller should try again later.
      */
-    public static void patchConfig(Path configDir) {
+    public static boolean patchConfig(Path configDir) {
         Path dhConfig = configDir.resolve("DistantHorizons.toml");
 
         if (!Files.exists(dhConfig)) {
             LOG.info("[IPL-DH-COMPAT] DistantHorizons.toml not found at {}; " +
-                "DH may not have been loaded yet. Will retry on next launch.", dhConfig);
-            return;
+                "DH has not generated its config yet. Will retry on next scheduled attempt.", dhConfig);
+            return false;
         }
 
         try {
@@ -104,20 +117,31 @@ public final class DhConfigPatch {
 
             if (hostingAlreadyIgnored) {
                 LOG.info("[IPL-DH-COMPAT] {} already in DH {} CSV, no change needed", HOSTING_DIMENSION, CSV_KEY);
-                return;
+                return true;
             }
 
             if (modified) {
                 Files.write(dhConfig, lines, StandardOpenOption.TRUNCATE_EXISTING);
                 LOG.info("[IPL-DH-COMPAT] Patched DH config to ignore {} — prevents LOD data collision across dimensions", HOSTING_DIMENSION);
                 LOG.info("[IPL-DH-COMPAT] NOTE: DH reads config at startup. A relaunch is required for this fix to take effect.");
-            } else if (!csvFound) {
+                return true;
+            }
+
+            if (!csvFound) {
                 LOG.warn("[IPL-DH-COMPAT] DH config exists but '{}' key not found. " +
                     "DH config format may have changed. Manual fix: add '" + HOSTING_DIMENSION +
                     "' to DH's ignored dimensions in the config screen.", CSV_KEY);
+                // Don't retry — the file exists but doesn't have the key we
+                // expect, so retrying won't help. The user has to update DH
+                // or fix the format manually.
+                return true;
             }
+            return true;
         } catch (IOException e) {
             LOG.warn("[IPL-DH-COMPAT] Failed to patch DH config: {}", e.getMessage());
+            // Don't retry on IOException — if the file is unreadable now it
+            // probably will be next time too. User intervention needed.
+            return true;
         }
     }
 
@@ -134,7 +158,10 @@ public final class DhConfigPatch {
         String value = line.substring(eqIdx + 1).trim();
 
         // Value should be a quoted string: "" or "dim1,dim2"
-        if (value.startsWith("\"") && value.endsWith("\"")) {
+        // Guard against malformed single-quote edge case (length < 2 with
+        // startsWith+endsWith("\"") both true would otherwise throw
+        // StringIndexOutOfBoundsException in substring below).
+        if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
             String inner = value.substring(1, value.length() - 1);
             String newInner;
             if (inner.isEmpty()) {

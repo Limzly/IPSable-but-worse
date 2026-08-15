@@ -87,12 +87,31 @@ public class FrontClipping {
     }
     
     /**
-     * Re-compute the clip equation using the current camera position.
-     * The clip equation is camera-relative, so when the camera moves
+     * Re-compute BOTH clip equations (world-space + eye-space) using the
+     * current camera position and the current RenderSystem modelView matrix.
+     *
+     * <p>The clip equation is camera-relative, so when the camera moves
      * between shader binds, the equation becomes stale. This causes
      * shadow stripes (bands of wrong lighting proportional to camera
-     * movement). Call this before uploading the equation to a shader
-     * to ensure it is up to date.
+     * movement). Calling this before uploading the equation to a shader
+     * ensures every shader bind gets an up-to-date equation.
+     *
+     * <p><b>Both</b> forms are refreshed:
+     * <ul>
+     *   <li>{@code activeClipPlaneEquationBeforeModelView} — world-space,
+     *       used by terrain shaders that do
+     *       {@code dot(Position + ChunkOffset, eq)}.</li>
+     *   <li>{@code activeClipPlaneAfterModelView} — eye-space, used by
+     *       entity / particle / block-entity shaders that do
+     *       {@code dot((ModelViewMat * Position).xyz, eq)}.</li>
+     * </ul>
+     *
+     * <p>The eye-space equation uses {@link RenderSystem#getModelViewMatrix()}
+     * which is the snapshot vanilla {@code ShaderInstance.apply()} will
+     * upload as {@code ModelViewMat}. This matches what the GLSL actually
+     * evaluates against. Vanilla always calls {@code applyModelViewMatrix()}
+     * before {@code apply()}, so the snapshot is current when our hook fires
+     * inside {@code _glUseProgram}.
      */
     public static void refreshClipEquationForCurrentCamera() {
         if (!isClippingEnabled) {
@@ -105,12 +124,14 @@ public class FrontClipping {
         // Re-compute the world-space equation with current camera pos
         activeClipPlaneEquationBeforeModelView =
             getClipEquationInner(clipping.pos(), clipping.normal(), ADJUSTMENT);
-        // Note: we don't re-compute activeClipPlaneAfterModelView here
-        // because we don't have the current modelView matrix. The
-        // entity-style path uses the after-model-view equation, but
-        // terrain shaders use the before-model-view (world-space) one.
-        // The stripes are on terrain, so refreshing the world equation
-        // is sufficient for the main fix.
+        // Re-compute the eye-space equation with the current ModelViewMat.
+        // Vanilla's RenderSystem.getModelViewMatrix() returns the snapshot
+        // that the next ShaderInstance.apply() will upload as ModelViewMat.
+        // We clone it inside transformClipEquation so we don't mutate the
+        // shared snapshot.
+        Matrix4f currentModelView = RenderSystem.getModelViewMatrix();
+        activeClipPlaneAfterModelView =
+            transformClipEquation(activeClipPlaneEquationBeforeModelView, currentModelView);
     }
     
     private static double[] transformClipEquation(

@@ -126,18 +126,45 @@ public class IPModEntryClient {
             if (ModList.get().isLoaded("distanthorizons")) {
                 Helper.log("Distant Horizons is also present -- auto-enabling compatibility render mode");
                 IPGlobal.renderMode = IPGlobal.RenderMode.compatibility;
-                
+
                 // Patch DH config to ignore the ipl_sable:sublevels hosting dimension.
                 // This prevents DH's LocalSaveStructure from accumulating data paths
                 // across dimensions, which causes LOD data collision (wrong terrain
                 // visible when portals link dimensions).
+                //
+                // First-launch gotcha: DH generates DistantHorizons.toml on its own
+                // first init, which may run AFTER our onInitializeClient hook. So
+                // patchConfig may return false on the first launch. We schedule a
+                // repeating task to retry every 100 ticks (5 seconds) for up to 60
+                // seconds; once patchConfig returns true (success or "format
+                // changed, give up") the task removes itself.
+                final Path configDir = net.minecraft.client.Minecraft.getInstance().gameDirectory.toPath().resolve("config");
                 try {
-                    Path configDir = net.minecraft.client.Minecraft.getInstance().gameDirectory.toPath().resolve("config");
-                    ipl.sable.dh.DhConfigPatch.patchConfig(configDir);
+                    boolean done = ipl.sable.dh.DhConfigPatch.patchConfig(configDir);
+                    if (!done) {
+                        Helper.log("DH config not yet generated, scheduling retry task (every 5s, up to 12 attempts)");
+                        // Schedule: retry every 100 ticks (5 sec) up to 12 times (60 sec total).
+                        // After that, give up — DH is presumably not generating its config for
+                        // some reason, and the user will see the warning logs.
+                        IPGlobal.CLIENT_TASK_LIST.addTask(MyTaskList.withRetryNumberLimit(
+                            12,
+                            MyTaskList.withInterval(100, () -> {
+                                boolean nowDone = ipl.sable.dh.DhConfigPatch.patchConfig(configDir);
+                                if (nowDone) {
+                                    Helper.log("DH config patched successfully on retry");
+                                }
+                                return nowDone;
+                            }),
+                            () -> Helper.err("DH config patch retry limit reached. " +
+                                "DH config was not generated within 60 seconds. " +
+                                "The ipl_sable:sublevels hosting dim will not be in the ignore list. " +
+                                "Relaunch the game to retry.")
+                        ));
+                    }
                 } catch (Throwable t) {
                     Helper.err("Failed to patch DH config: " + t.getMessage());
                 }
-                
+
                 IPGlobal.CLIENT_TASK_LIST.addTask(MyTaskList.oneShotTask(() -> {
                     try {
                         IPConfig config = IPConfig.getConfig();

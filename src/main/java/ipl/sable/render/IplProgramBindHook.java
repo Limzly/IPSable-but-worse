@@ -1,6 +1,8 @@
 package ipl.sable.render;
 
 import com.mojang.blaze3d.platform.GlStateManager;
+import com.mojang.blaze3d.systems.RenderSystem;
+import org.joml.Matrix4f;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
@@ -16,35 +18,37 @@ import java.util.concurrent.ConcurrentMap;
 /**
  * Shared GL-program-bind hook logic.
  *
- * <p>Called from multiple mixin sites because Iris 1.8 binds programs through
- * two distinct chokepoints:
- *
+ * <p>Called by any program-bind chokepoint hook:
  * <ul>
- *   <li>{@link GlStateManager#_glUseProgram(int)} — vanilla MC's cached
+ *   <li>{@link ipl.sable.mixin.client.IplGlUseProgramProbeMixin} on
+ *       {@link GlStateManager#_glUseProgram(int)} — vanilla MC's cached
  *       state-manager wrapper. Some Iris paths and Mojang's own setShader
  *       fast path go through it.</li>
- *   <li>{@code com.mojang.blaze3d.shaders.ProgramManager.glUseProgram(int)} —
- *       vanilla MC's <em>uncached</em> helper that {@code ShaderInstance.apply()}
+ *   <li>{@link ipl.sable.mixin.client.IplProgramManagerProbeMixin} on
+ *       {@code com.mojang.blaze3d.shaders.ProgramManager.glUseProgram(int)}
+ *       — vanilla MC's uncached helper that {@code ShaderInstance.apply()}
  *       (and Iris's {@code ExtendedShader.apply()},
- *       {@code Program.use()/unbind()}) all funnel through. This path does
- *       NOT touch {@code GlStateManager._glUseProgram}, so a mixin on the
- *       latter alone misses every Iris shaderpack-rewritten program.</li>
+ *       {@code Program.use()/unbind()}) all funnel through.</li>
+ *   <li>{@link ipl.sable.mixin.client.IplFlywheelEmbeddedClipMixin} on
+ *       Flywheel's {@code EmbeddedEnvironment.setupDraw} — Flywheel bypasses
+ *       all Mojang wrappers and calls {@code GL20C.glUseProgram} directly.</li>
  * </ul>
  *
- * <p>Empirical proof (cog_leak8 capture analysis): Iris's
- * {@code ExtendedShader} renders the leaking cog through a program that
- * never appeared in our previous-only {@code _glUseProgram}-hooked
- * registry. The bind goes through {@code ProgramManager.glUseProgram}.
- * Hooking both chokepoints (and calling this helper from both) covers
- * the cog-leaking program plus everything Mojang dispatches the
- * traditional way.
+ * <p><b>Why this is the single chokepoint:</b> Previously
+ * {@link IplGlUseProgramProbeMixin} had its own inlined copy of the
+ * clip-equation write logic. The Bug 2 (no-clip sentinel) and Bug 4
+ * (camera-relative equation refresh) fixes were only applied to this
+ * file, not the inlined copy — meaning vanilla terrain shaders bound via
+ * {@code _glUseProgram} still had stale clip equations and leaked.
+ * Centralizing here means every bind path benefits from the same
+ * refresh + sentinel logic.
  *
  * <p>Idempotency: {@link #onBind(int)} is safe to call multiple times for
  * the same bind. {@link #IPL$LOC_CACHE} dedupes uniform-location lookups
  * and {@link IplSubLevelUniformRegistry} dedupes registry inserts;
  * uniform writes via {@code glProgramUniform4f} are idempotent (same value
- * writes a no-op). So if both mixins fire for one logical bind, we just
- * do the work twice — no correctness hazard.
+ * writes a no-op). So if multiple probe mixins fire for one logical bind,
+ * we just do the work multiple times — no correctness hazard.
  */
 public final class IplProgramBindHook {
 
@@ -53,8 +57,15 @@ public final class IplProgramBindHook {
     /**
      * Cache of resolved uniform locations per program id, so we only call
      * {@code glGetUniformLocation} once per program over the session. -1 in
-     * either slot means "not present on this program" — we still cache the
+     * any slot means "not present on this program" — we still cache the
      * negative result to avoid re-querying.
+     *
+     * <p>Slots:
+     * <ul>
+     *   <li>[0] = {@code iportal_ClippingEquation} (IP portal clip)</li>
+     *   <li>[1] = {@code ipl_subLevelClipEquation}   (Sable sub-level primary)</li>
+     *   <li>[2] = {@code ipl_subLevelClipEquation[1]} (Sable sub-level second cut, multi-straddle)</li>
+     * </ul>
      */
     public static final ConcurrentMap<Integer, int[]> IPL$LOC_CACHE = new ConcurrentHashMap<>();
 
@@ -92,8 +103,8 @@ public final class IplProgramBindHook {
 
             if (iportalLoc >= 0 && IPL$LOGGED_PROGRAMS.putIfAbsent(program, Boolean.TRUE) == null) {
                 LOG.info(
-                    "[IPL-GLUSE-WRITE] programId={} iportalLoc={} subLevelLoc={} clippingEnabledOnFirstBind={}",
-                    program, iportalLoc, subLevelLoc, FrontClipping.isClippingEnabled
+                    "[IPL-GLUSE-WRITE] programId={} iportalLoc={} subLevelLoc={} subLevelLoc2={} clippingEnabledOnFirstBind={}",
+                    program, iportalLoc, subLevelLoc, subLevelLoc2, FrontClipping.isClippingEnabled
                 );
             }
         }
@@ -102,12 +113,14 @@ public final class IplProgramBindHook {
         boolean inPortalRender = PortalRendering.isRendering();
         boolean inSubLevelBracket = SubLevelClipUniformPatcher.getCurrentSubLevelEqWorld() != null;
         if (haveActive) {
-            // Refresh the clip equation with the current camera position.
-            // The equation is camera-relative, so when the camera moves
-            // between shader binds, the equation becomes stale. This causes
-            // shadow stripes (bands of wrong lighting proportional to camera
-            // movement). Re-computing here ensures every shader bind gets
-            // an up-to-date equation.
+            // Refresh the clip equation with the current camera position AND
+            // current modelView matrix. The equation is camera-relative, so
+            // when the camera moves between shader binds, the equation becomes
+            // stale. This causes shadow stripes (bands of wrong lighting
+            // proportional to camera movement). Re-computing here ensures
+            // every shader bind gets an up-to-date equation, both the
+            // world-space form (for terrain shaders) and the eye-space form
+            // (for entity / BE / particle shaders).
             FrontClipping.refreshClipEquationForCurrentCamera();
             IplClipEquationCache.refreshFromActive();
         } else if (!inPortalRender && !inSubLevelBracket) {
@@ -118,6 +131,14 @@ public final class IplProgramBindHook {
             // so the clip test doesn't accidentally clip non-portal content.
             // This fixes liquids/particles leaking through terrain after
             // a portal render completes.
+            //
+            // We deliberately do NOT clear slot 1 / slot 2 here. Those are
+            // owned by Sable's sub-level pipeline and stale values are
+            // harmless outside a sub-level bracket because GL_CLIP_DISTANCE1
+            // and GL_CLIP_DISTANCE2 are disabled (we never enable them
+            // outside the inSubLevelBracket branch below). Clearing them
+            // would cost extra GL calls per shader bind in the hot path
+            // without correctness benefit.
             int iportalLoc = locs[0];
             if (iportalLoc >= 0) {
                 // Write the "no clip" sentinel (0,0,0,1) to disable clipping
@@ -161,7 +182,7 @@ public final class IplProgramBindHook {
             );
         }
 
-        // Slot 1 (sub-level clip):
+        // Slot 1 (sub-level clip, primary):
         //   Entity-style programs -> eye-space equation
         //   Non-entity programs   -> camera-relative world equation
         // Sable applies the BE pose before these entity shaders evaluate their
@@ -195,14 +216,58 @@ public final class IplProgramBindHook {
                 }
             }
         }
+
+        // Slot 2 (sub-level clip, second cut for multi-straddle portals).
+        // Sable can carry up to two concurrent sub-level cuts when a portal
+        // straddles another portal (multi-straddle). The first cut goes to
+        // slot 1, the second to slot 2 — each gets its own gl_ClipDistance
+        // so the rasterizer doesn't interpolate them into a chord.
+        //
+        // <p>If there is no second cut (single-straddle case), write the
+        // no-clip sentinel (0,0,0,1) so any value left over from a previous
+        // multi-straddle frame doesn't keep clipping.
+        int subLevelLoc2 = locs.length > 2 ? locs[2] : -1;
+        if (subLevelLoc2 >= 0) {
+            float[] subEq2;
+            if (IplProgramRegistry.usesVanillaSubLevelInputSpace(program)) {
+                subEq2 = SubLevelClipUniformPatcher.getCurrentSubLevelEqVanillaInput2();
+            } else if (entityStyle) {
+                subEq2 = SubLevelClipUniformPatcher.getCurrentSubLevelEqEye2();
+                if (subEq2 == null) {
+                    subEq2 = SubLevelClipUniformPatcher.getCurrentSubLevelEqWorld2();
+                }
+            } else {
+                subEq2 = SubLevelClipUniformPatcher.getCurrentSubLevelEqWorld2();
+            }
+            if (subEq2 == null) {
+                GL41.glProgramUniform4f(program, subLevelLoc2, 0f, 0f, 0f, 1f);
+            } else if (IPL$SLOT1_FLIP) {
+                GL41.glProgramUniform4f(
+                    program, subLevelLoc2,
+                    -subEq2[0], -subEq2[1], -subEq2[2], -subEq2[3]
+                );
+            } else {
+                GL41.glProgramUniform4f(
+                    program, subLevelLoc2,
+                    subEq2[0], subEq2[1], subEq2[2], subEq2[3]
+                );
+            }
+        }
     }
 
+    /**
+     * Diagnostic flag. When {@code -Dipl.sable.clip.slot1Flip=true} is set,
+     * slot-1 (and slot-2, since they share the sub-level equation form)
+     * equations are negated so every kept vertex becomes discarded and vice
+     * versa. If sub-level geometry STILL renders with this active, the
+     * uniform/upload pipeline isn't reaching the shader at all.
+     */
     private static final boolean IPL$SLOT1_FLIP =
         Boolean.getBoolean("ipl.sable.clip.slot1Flip");
 
     static {
         if (IPL$SLOT1_FLIP) {
-            LOG.info("[IPL-PROGRAM-BIND] slot1Flip=TRUE -- writing negated slot-1 equations for diagnostic");
+            LOG.info("[IPL-PROGRAM-BIND] slot1Flip=TRUE -- writing negated slot-1+2 equations for diagnostic");
         }
     }
 }
