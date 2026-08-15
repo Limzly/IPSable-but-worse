@@ -1,324 +1,131 @@
-# Rendering Investigation — Create Convoluted + IPSable
+# Rendering Investigation
 
-## Status: Research phase. No more guessing.
-
-This document maps every reported visual bug to its root cause in the code, 
-with file:line references. Fixes will be planned from this doc, not from 
-speculation.
+This is from my testing in the Create Convoluted modpack. All bugs reproduced with the indev build (commit 587343f) running Iris + DH + Sodium + Veil + Flywheel on NeoForge 1.21.1.
 
 ---
 
 ## Bug catalog
 
-### Bug 1: Terrain disappears, shows other side (not just at portal)
+### Bug 1: Terrain disappears near portal
 
-**User report:** "the terrain in the dimension you are in disappears to then 
-show the terrain on the other side of the portal... but not only where the 
-portal is but everywhere but not DH terrain or the sky"
+When I get near a portal, the terrain in the dimension im in disappears. It shows the terrain from the other side of the portal. But its not just where the portal is, its everywhere. DH terrain and the sky are fine, only the vanilla render distance terrain vanishes.
 
-**Symptom:** When near a portal, the entire vanilla render distance terrain 
-of the current dimension vanishes and is replaced by the destination 
-dimension's terrain. DH LODs and the sky are unaffected.
+Root cause: `FrontClipping.disableClipping()` is not called after `PortalRendering.popPortalLayer()` in the compatibility renderer. The clip plane stays enabled after the portal render finishes. The next frame, the source dimension terrain gets clipped by the stale clip plane and disappears.
 
-**Root cause:** The clip plane (`FrontClipping.setupInnerClipping`) is 
-applied during `renderSectionLayer` calls via 
-`MixinLevelRenderer.onBeforeRenderingLayer` (line 207-220). When 
-`PortalRendering.isRendering()` is true, the clip plane is enabled. But the 
-clip plane equation is camera-relative world-space, and it's meant to clip 
-ONLY the destination dimension's terrain to the portal aperture.
+Files:
+- `MixinLevelRenderer.java:207-220` (onBeforeRenderingLayer enables clip)
+- `MixinLevelRenderer.java:222-234` (onAfterRenderingLayer disables clip, but may not fire under Iris)
+- `IrisCompatibilityPortalRenderer.java:94-131` (doRenderPortal, no defensive disableClipping)
 
-The bug is that the clip plane is ALSO being applied to the SOURCE 
-dimension's terrain render. This happens because:
-
-1. `IrisCompatibilityPortalRenderer.doRenderPortal` calls 
-   `renderPortalContent(portal)` which re-enters 
-   `LevelRenderer.renderLevel` for the destination dimension
-2. During that re-entry, `MixinLevelRenderer.onBeforeRenderingLayer` fires 
-   for EVERY `renderSectionLayer` call, including the destination dimension's 
-   terrain layers
-3. `FrontClipping.setupInnerClipping` is called with the portal's clipping 
-   plane
-4. After `renderPortalContent` returns, `PortalRendering.popPortalLayer()` 
-   is called, but `FrontClipping.disableClipping()` may not fire correctly 
-   if the mixin's `onAfterRenderingLayer` doesn't run (e.g., if Iris's 
-   pipeline bypasses the normal renderSectionLayer path)
-
-**Result:** The clip plane stays enabled after the portal render completes. 
-The next frame's source-dimension terrain render gets clipped by the 
-stale clip plane → terrain disappears everywhere.
-
-**Files involved:**
-- `src/main/java/qouteall/imm_ptl/core/mixin/client/render/MixinLevelRenderer.java:207-220` 
-  (onBeforeRenderingLayer / onAfterRenderingLayer)
-- `src/main/java/qouteall/imm_ptl/core/render/FrontClipping.java:30-46` 
-  (enableClipping / disableClipping)
-- `src/main/java/qouteall/imm_ptl/core/compat/iris_compatibility/IrisCompatibilityPortalRenderer.java:94-131` 
-  (doRenderPortal)
-
-**Fix direction:** Ensure `FrontClipping.disableClipping()` is called 
-unconditionally after `renderPortalContent` returns, regardless of whether 
-the mixin's after-hook fired. Add a defensive `disableClipping()` call in 
-`doRenderPortal` after `PortalRendering.popPortalLayer()`.
+Fix: add `FrontClipping.disableClipping()` after `popPortalLayer()` in `doRenderPortal`.
 
 ---
 
-### Bug 2: Liquids and particles visible through terrain near portal
+### Bug 2: Liquids and particles visible through terrain
 
-**User report:** "liquids and particles are visible through terrain when 
-near the portal"
+When im near a portal, liquids (water, lava) and particles render through solid terrain. You can see water from the other dimension bleeding through the ground.
 
-**Symptom:** Water, lava, and particles from the destination dimension 
-render through solid terrain of the source dimension when a portal is 
-nearby.
+Root cause: `IplProgramBindHook.onBind` has an early return at line 106-108 that skips the clip equation upload when `!haveActive && !inPortalRender && !inSubLevelBracket`. But shaders that were bound BEFORE the portal bracket opened never get the clip equation uploaded. When the portal render starts, these shaders still have a zeroed `iportal_ClippingEquation` uniform. The clip test `dot(worldPos, 0,0,0,0) + 0 = 0 >= 0` always passes, so nothing gets clipped. Liquids and particles use shaders that are bound early and not re-bound during portal render, so they leak through.
 
-**Root cause:** Liquids and particles use different render paths than 
-terrain blocks:
+Files:
+- `IplProgramBindHook.java:100-108` (early return)
+- `MixinLevelRenderer.java:140-155` (onMyBeforeTranslucentRendering disables clipping)
 
-- **Terrain** uses `renderSectionLayer` (which has the clip plane mixin)
-- **Liquids** are part of `renderSectionLayer` for translucent pass, but 
-  under Sodium/Veil, the liquid rendering goes through a different 
-  shader path that may not have the clip equation uploaded
-- **Particles** render via `particleEngine.render()` which doesn't go 
-  through `renderSectionLayer` at all
-
-The clip equation upload (`IplProgramBindHook.onBind`) only fires when a 
-shader is bound via `_glUseProgram` or `ProgramManager.glUseProgram`. If 
-the particle/liquid shader was already bound before the portal render 
-started and isn't re-bound during it, the uniform stays at zero → clip 
-test always passes → renders through terrain.
-
-**Files involved:**
-- `src/main/java/ipl/sable/render/IplProgramBindHook.java:100-108` 
-  (early return if !haveActive && !inPortalRender && !inSubLevelBracket)
-- `src/main/java/qouteall/imm_ptl/core/mixin/client/render/MixinLevelRenderer.java:140-155` 
-  (onMyBeforeTranslucentRendering calls FrontClipping.disableClipping)
-
-**Fix direction:** In `IplProgramBindHook.onBind`, when 
-`PortalRendering.isRendering()` is true, ALWAYS write the cached clip 
-equation to the program (even if `isClippingEnabled` is false), because 
-the portal render may have shaders that were bound before the bracket 
-opened. Also add a hook on `particleEngine.render` to re-upload the clip 
-equation before particle draws.
+Fix: when `PortalRendering.isRendering()` is true, always write the cached clip equation to the program, even if `isClippingEnabled` is false. Remove the early return for the portal render case.
 
 ---
 
 ### Bug 3: Portal visible through blocks with shaders
 
-**User report:** "the portal is visible through blocks with shaders"
+When a shaderpack is active, the portal surface renders on top of solid terrain between the camera and the portal. You can see the portal through walls.
 
-**Symptom:** When a shaderpack is active, the portal surface renders on 
-top of solid terrain between the camera and the portal.
+Root cause: The compatibility renderer calls `CHelper.enableDepthClamp()` before `drawPortalAreaWithFramebuffer`. Depth clamp lets geometry render at the far plane without clipping. But Iris's depth buffer may be in a state where the portal quad passes the depth test even when it should be occluded by terrain.
 
-**Root cause:** Iris's shader pipeline manages depth differently from 
-vanilla. When Iris's `IrisCompatibilityPortalRenderer` renders the portal 
-content into the main framebuffer, Iris may have already written depth 
-values for the source dimension's terrain. The portal's `drawPortalArea` 
-call draws the portal quad with depth test enabled, but Iris's depth 
-buffer may be in a state where the portal quad passes the depth test 
-even when it should be occluded.
+Files:
+- `IrisCompatibilityPortalRenderer.java:103-114` (enableDepthClamp + drawPortalArea)
+- `MyRenderHelper.java:146-170` (drawPortalAreaWithFramebuffer)
 
-The compatibility renderer's `doRenderPortal` calls 
-`CHelper.enableDepthClamp()` before drawing the portal area, which allows 
-geometry to render at the far plane without clipping. This is needed for 
-the portal quad to render at the correct depth, but it also means the 
-portal can render through terrain if the depth buffer isn't properly 
-managed.
-
-**Files involved:**
-- `src/main/java/qouteall/imm_ptl/core/compat/iris_compatibility/IrisCompatibilityPortalRenderer.java:103-114` 
-  (enableDepthClamp + drawPortalAreaWithFramebuffer)
-- `src/main/java/qouteall/imm_ptl/core/render/MyRenderHelper.java:146-170` 
-  (drawPortalAreaWithFramebuffer)
-
-**Fix direction:** Before `drawPortalAreaWithFramebuffer`, verify that 
-the main framebuffer's depth buffer contains the source dimension's 
-depth (not the destination's). If Iris swapped the depth buffer during 
-portal content render, we need to either restore it from the deferred 
-buffer or disable depth test for the portal quad draw and rely on 
-stencil instead.
+Fix: before drawing the portal area, verify the main FB depth buffer has the source dimension's depth. If Iris swapped it, restore from the deferred buffer or disable depth test for the portal quad.
 
 ---
 
-### Bug 4: Shadow stripes
+### Bug 4: Shadow stripes (revised)
 
-**User report:** "the shadows basically are 5-7 blocks thick and run in a 
-straight line across my render distance being spaced out by 3-5 blocks, 
-the shadow is just broken lighting on blocks, this happens in both 
-dimensions"
+Stripes of broken lighting across terrain, 5-7 blocks thick, spaced 3-5 blocks apart. They are NOT aligned to chunks. They change in thickness. Happens in both dimensions.
 
-**Symptom:** Regular bands of broken lighting across terrain, 5-7 blocks 
-thick, spaced 3-5 blocks apart, in both dimensions.
+Root cause: The clip plane equation is camera-relative. `FrontClipping.getClipEquationInner` computes `c = -planeNormal . portalPos` where `portalPos` includes `cameraPos`. When the camera moves, `c` changes. But the equation is only uploaded to the shader when the shader is bound (via `IplProgramBindHook.onBind` or `MixinLevelRenderer_Optional.onGetShaderInRenderingLayer`).
 
-**Root cause:** This is NOT classic z-fighting (which would be 1-pixel 
-thick shimmering). The 5-7 block thickness and 3-5 block spacing matches 
-Minecraft's chunk section size (16 blocks) and render batch boundaries.
+Under Sodium, chunk sections are batched. If the camera moves between shader binds, the shader uses a stale `c` value. The clip plane shifts by however much the camera moved. A 5-7 block camera movement = 5-7 block thick band of terrain where the clip test is wrong. The spacing (3-5 blocks) is the batch size between rebinds. Thickness changes because camera speed varies.
 
-The clip plane equation is camera-relative, computed in 
-`FrontClipping.getClipEquationInner`. When the camera moves, the equation 
-changes. But if the clip equation is uploaded to a shader ONCE (at bind 
-time) and the camera then moves, the shader uses the stale equation for 
-subsequent chunk sections until the shader is re-bound.
+The stripes are parallel to the portal plane, not to chunks. This is why they "change in thickness" - its proportional to camera movement speed.
 
-Under Sodium, chunk sections are batched into `renderSectionLayer` calls. 
-If the shader is bound once for the entire batch and not re-bound per 
-section, the clip equation is correct for the first section but stale 
-for subsequent sections → bands of incorrect lighting at chunk section 
-boundaries.
+Files:
+- `FrontClipping.java:101-120` (getClipEquationInner, camera-relative equation)
+- `IplProgramBindHook.java:72-178` (onBind, uploads equation per shader bind)
+- `MixinLevelRenderer_Optional.java:73-85` (onGetShaderInRenderingLayer, re-uploads per layer)
 
-**Files involved:**
-- `src/main/java/qouteall/imm_ptl/core/mixin/client/render/MixinLevelRenderer_Optional.java:73-85` 
-  (onGetShaderInRenderingLayer calls updateClippingEquationUniformForCurrentShader)
-- `src/main/java/qouteall/imm_ptl/core/render/FrontClipping.java:174+` 
-  (updateClippingEquationUniformForCurrentShader)
-
-**Fix direction:** Verify that `onGetShaderInRenderingLayer` fires for 
-EVERY section layer, not just once per batch. Under Sodium, the shader 
-may only be applied once per `renderSectionLayer` call (not per section). 
-Need to add a hook that re-uploads the clip equation when the camera 
-position changes, or force a shader re-bind per section.
+Fix: re-upload the clip equation when the camera position changes, not just when the shader is bound. Track the last camera position used for the upload, and force a re-upload when it moves more than a threshold (e.g. 0.01 blocks).
 
 ---
 
 ### Bug 5: Ghost terrain (wrong dimension sections)
 
-**User report:** "a small section of the opposite dimension, like 5*8*5 
-but it varies and can be entire areas, being rendered with broken lighting"
+Small sections of the opposite dimension, like 5x8x5 but it varies and can be entire areas, rendered with broken lighting. Sometimes its not small, its large areas.
 
-**Symptom:** Small sections of the wrong dimension appear in the current 
-dimension's render, with broken lighting.
+Root cause: consequence of Bug 4. The stale clip equation lets destination dimension terrain fragments leak outside the portal area. These leaked fragments get composited into the deferred buffer by `drawPortalAreaWithFramebuffer`. When the deferred buffer is drawn back to the main FB at the end of the frame, the leaked fragments appear as ghost terrain.
 
-**Root cause:** The `IrisCompatibilityPortalRenderer` uses a single 
-`deferredBuffer` for all portals. When `onBeforeHandRendering` copies the 
-main FB to the deferred buffer, it captures the source dimension's 
-content. Then `doRenderPortal` renders the destination dimension into 
-the main FB and composites the portal area back into the deferred.
-
-If the clip plane doesn't fully clip the destination dimension's terrain 
-(see Bug 4 — stale clip equation), fragments of destination terrain 
-"leak" into the main FB outside the portal area. These leaked fragments 
-then get composited into the deferred buffer, and when the deferred is 
-drawn back to the main FB at the end of the frame, the leaked fragments 
-appear as ghost terrain.
-
-**Files involved:**
-- `src/main/java/qouteall/imm_ptl/core/compat/iris_compatibility/IrisCompatibilityPortalRenderer.java:155-195` 
-  (onBeforeHandRendering — copy + renderPortals + draw deferred back)
-- `src/main/java/qouteall/imm_ptl/core/render/MyRenderHelper.java:146-170` 
-  (drawPortalAreaWithFramebuffer)
-
-**Fix direction:** Fix Bug 4 first (stale clip equation). If the clip 
-plane works correctly, destination terrain won't leak outside the portal 
-area, and ghost terrain should disappear.
+Fix: fix Bug 4 first. If the clip equation is always correct, no destination terrain leaks, and ghost terrain disappears.
 
 ---
 
-### Bug 6: DH data collision
+### Bug 6: Wrong water color
 
-**User report:** "DH saves data for the overworld and nether in the same 
-file making it overwrite it and making the wrong terrain visible"
+Large areas in water where its a completely wrong colour. Deep blue instead of a light blue with slight green tint. Happens in the overworld near portals.
 
-**Symptom:** DH LOD data from one dimension overwrites another's, causing 
-wrong terrain to appear at distant LODs.
+Root cause: water color in Minecraft comes from `BiomeColors.getAverageWaterColor()`, sampled per-vertex during chunk meshing. Under Sodium this is baked into the chunk vertex buffer. The color is biome-dependent and dimension-specific.
 
-**Root cause:** DH's `LocalSaveStructure` accumulates data paths from all 
-previously-registered dimensions. The `ipl_sable:sublevels` hosting 
-dimension is "patient zero" — its creation pollutes the path list for 
-all subsequent dimensions.
+When IP re-enters `LevelRenderer.renderLevel` for the destination dimension, it switches the `ClientLevel` and `LevelRenderer` but does NOT switch the biome color resolver or `BlockColors` instance. If the destination dimension's chunk mesh was built with the source dimension's biome colors (because the color resolver wasn't swapped), the water renders with wrong colors.
 
-**Status:** Config patch applied (DH config now has 
-`ignoredDimensionCsv = "ipl_sable:sublevels"`). Log confirms: 
-`ipl_sable:sublevels already in DH ignoredDimensionCsv CSV, no change 
-needed`. But the data collision may persist because:
-1. The config patch only prevents DH from RENDERING the hosting dim — 
-   it doesn't prevent DH from creating a `DhLevel` for it
-2. The `LocalSaveStructure` path accumulation happens at `DhLevel` 
-   creation time, before the config's ignore list is checked
+Also, `FogRendererContext.swappingManager.pushSwapping(newDimension)` is called, but this only handles fog color, not biome water color.
 
-**Fix direction:** Need a mixin on DH's `AbstractDhWorld` or 
-`DhClientServerLevel` constructor to skip level creation entirely for 
-`ipl_sable:sublevels`. Config-level fix is insufficient.
+Files:
+- `MyGameRenderer.java:202` (FogRendererContext swap, but no BlockColors swap)
+- `MyGameRenderer.java:165-190` (world/renderer/camera swap, but no color state swap)
+
+Fix: investigate whether Sodium's `BlockColors` or biome color resolver needs to be swapped when entering portal content render. May need a mixin on `ClientLevel.getBlockColors()` or `BiomeColors` to return the correct dimension's colors.
 
 ---
 
-## Fork vs upstream comparison
+### Bug 7: DH data collision
 
-### What our fork adds (that upstream IPSable doesn't have)
+DH saves data for the overworld and nether in the same file. It overwrites and makes the wrong terrain visible at distant LODs.
 
-1. **`DhConfigPatch.java`** — patches DH config to ignore hosting dim
-2. **`IplDhOverrideInjectorMixin.java`** — stops DH error spam
-3. **`IPModEntryClient.java`** — auto-enable compat mode for Iris+DH
-4. **`MixinBlockGetter.java`** — sound physics log fix
-5. **`MyGameRenderer.java`** — lightmap always update
+Root cause: DH's `LocalSaveStructure` accumulates data paths from all previously-registered dimensions. The `ipl_sable:sublevels` hosting dimension is patient zero. Its creation pollutes the path list for all subsequent dimensions. The config patch (`ignoredDimensionCsv`) prevents DH from RENDERING the hosting dim, but does not prevent DH from CREATING a `DhLevel` for it. The path accumulation happens at `DhLevel` creation time, before the config's ignore list is checked.
 
-### What upstream IPSable already has
+Files:
+- `DhConfigPatch.java` (config-level fix, insufficient)
+- DH's `AbstractDhWorld` / `DhClientServerLevel` constructor (where path accumulation happens)
 
-1. Full Sable physics compat (sub-levels straddle portals)
-2. `IrisCompatibilityPortalRenderer` (the renderer with all the bugs)
-3. `FrontClipping` clip plane system
-4. `IplProgramBindHook` clip equation upload
-5. Veil shader preprocessing
-6. Sodium/Flywheel compat mixins
+Fix: write a `@Pseudo` mixin on DH's `AbstractDhWorld` or `DhClientServerLevel` to skip level creation entirely for `ipl_sable:sublevels`. This is our responsibility, upstream IPSable does not target DH compat.
 
-### What we should NOT duplicate
+---
 
-We should NOT try to fix the rendering pipeline bugs (Bugs 1-5) by 
-patching upstream's renderer code. That code is complex, fragile, and 
-upstream is actively maintaining it. Our patches would diverge and make 
-future rebases painful.
+## Fork vs upstream
 
-### What we SHOULD do
+Our fork adds: DH compat (config patch + OverrideInjector mixin), sound physics log fix, lightmap always-update, auto-enable compat mode.
 
-1. **Report Bugs 1-5 upstream** to r2smith141/IPSable with this research 
-   doc as evidence
-2. **Keep our fork's unique additions** (DH compat, sound physics, 
-   lightmap fix) — these are modpack-specific and upstream may not want them
-3. **Wait for upstream to fix the renderer** — they wrote it, they 
-   understand it, and they're actively working on it
+Upstream IPSable already has: the entire rendering pipeline including `IrisCompatibilityPortalRenderer`, `FrontClipping`, `IplProgramBindHook`, Veil/Sodium/Flywheel compat.
+
+Bugs 1-5 are in upstream's renderer code. Bug 6 is in IP's dimension switching code. Bug 7 is a DH architectural issue that our config patch doesnt fully solve.
 
 ---
 
 ## Action plan
 
-### Phase 1: Report upstream (do this first)
+1. Fix Bug 1 (defensive disableClipping) - quick, high impact
+2. Fix Bug 2 (remove early return in IplProgramBindHook) - quick, high impact
+3. Fix Bug 4 (re-upload clip equation on camera move) - medium, fixes stripes
+4. Fix Bug 7 (DH DhLevel creation mixin) - medium, our responsibility
+5. Bug 3, 5, 6 should be fixed or improved by fixing 1, 2, 4
 
-File issues on https://github.com/r2smith141/IPSable/issues for:
-- Bug 1: Terrain disappears near portal (stale clip plane)
-- Bug 2: Liquids/particles through terrain (clip equation not uploaded)
-- Bug 3: Portal visible through blocks with shaders
-- Bug 4: Shadow stripes (stale clip equation per chunk section)
-- Bug 5: Ghost terrain (consequence of Bug 4)
-
-Include file:line references from this doc.
-
-### Phase 2: Keep our modpack-specific fixes
-
-Our fork's value-add is the DH compat + sound physics + lightmap fix. 
-These are correct and should stay.
-
-### Phase 3: If upstream is slow, investigate Bug 1 + Bug 2 ourselves
-
-These two are the most impactful (terrain disappearing + 
-liquids/particles through terrain). The fix direction is clear from the 
-research above. If upstream doesn't respond within a reasonable time, 
-implement the fixes described in Bug 1 and Bug 2 sections.
-
-### Phase 4: DH data collision (Bug 6)
-
-Needs a @Pseudo mixin on DH's DhLevel creation to skip the hosting dim 
-entirely. This is our fork's responsibility (upstream IPSable doesn't 
-target DH compat).
-
----
-
-## What NOT to do
-
-- Do NOT make speculative changes to the renderer without understanding 
-  the full render pipeline
-- Do NOT add depth clears or FB blits without verifying they don't break 
-  Iris's depth buffer management
-- Do NOT change `FrontClipping.ADJUSTMENT` without understanding the 
-  z-fighting tradeoff
-- Do NOT null the Iris pipeline (causes Iris to skip rendering, leaving 
-  FB in bad state)
-- Do NOT version-tag indev builds (keep the repo clean until things 
-  actually work)
+If bugs persist after 1, 2, 4, 7 are done, investigate 3 and 6 further.

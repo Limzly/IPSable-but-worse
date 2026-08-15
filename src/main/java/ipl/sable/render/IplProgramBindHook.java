@@ -102,8 +102,28 @@ public final class IplProgramBindHook {
         boolean inPortalRender = PortalRendering.isRendering();
         boolean inSubLevelBracket = SubLevelClipUniformPatcher.getCurrentSubLevelEqWorld() != null;
         if (haveActive) {
+            // Refresh the clip equation with the current camera position.
+            // The equation is camera-relative, so when the camera moves
+            // between shader binds, the equation becomes stale. This causes
+            // shadow stripes (bands of wrong lighting proportional to camera
+            // movement). Re-computing here ensures every shader bind gets
+            // an up-to-date equation.
+            FrontClipping.refreshClipEquationForCurrentCamera();
             IplClipEquationCache.refreshFromActive();
         } else if (!inPortalRender && !inSubLevelBracket) {
+            // Not in a portal render and not in a sub-level bracket.
+            // But if we were previously in a portal render, the shader's
+            // iportal_ClippingEquation uniform may still have a non-zero
+            // value from the last portal render. We need to zero it out
+            // so the clip test doesn't accidentally clip non-portal content.
+            // This fixes liquids/particles leaking through terrain after
+            // a portal render completes.
+            int iportalLoc = locs[0];
+            if (iportalLoc >= 0) {
+                // Write the "no clip" sentinel (0,0,0,1) to disable clipping
+                // for this shader. dot(worldPos, 0,0,0) + 1 = 1 >= 0, always passes.
+                GL41.glProgramUniform4f(program, iportalLoc, 0, 0, 0, 1);
+            }
             return;
         }
 
