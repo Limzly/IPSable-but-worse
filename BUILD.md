@@ -113,16 +113,13 @@ Your build host has insufficient RAM. NeoGradle's Vineflower decompiler
 defaults to a 4 GB heap. The full build (Gradle daemon + decompiler + compile
 + jar) needs about 6-8 GB free RAM to be comfortable.
 
-If you only have 4 GB available, apply the sandbox memory caps:
-
-```bash
-git apply sandbox-memory-caps.patch
-./gradlew jarJar --no-daemon
-```
-
-This caps the Gradle daemon to 2 GB and the Vineflower decompiler to 1 GB.
-The build will be slower but should complete. Revert before pushing any
-changes upstream.
+If you only have 4 GB available, you can cap the Gradle heap and Vineflower
+heap yourself by editing `gradle.properties` and `build.gradle`. There used
+to be a `sandbox-memory-caps.patch` in the repo for this, but it was removed
+because it was sandbox-only and broke on newer NeoGradle versions. Just
+lower `org.gradle.jvmargs=-Xmx6G` to `-Xmx2g` and add
+`-XX:MaxMetaspaceSize=512m` if you need to. The build will be slower but
+should complete.
 
 ### `./gradlew: Permission denied`
 
@@ -150,8 +147,6 @@ After a successful build, the jar is at:
 ```
 build/libs/immersive-portals-sable-compat-<fork_version>+ip-<mod_version>.jar
 ```
-
-For v0.6.8, that's `immersive-portals-sable-compat-0.6.8+ip-6.0.7.jar`.
 
 Drop this jar into your Minecraft instance's `mods/` folder. It replaces
 both:

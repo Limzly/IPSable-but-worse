@@ -2,111 +2,110 @@
 
 This is a fork of IPSable for the Create Convoluted modpack. It's indev.
 
-## 0.6.8 (indev)
+## Status legend
 
-### Code audit fixes
+- **Confirmed** — tested in-game, behavior verified
+- **Code-level** — code change based on investigation, not yet tested in-game
+- **Untested** — fix may or may not work, needs in-game verification
+- **Not fixed** — known issue, no fix attempted yet
 
-Found 15 issues during a full code audit. All fixed.
+## Currently confirmed working
 
-**Bug A: IplGlUseProgramProbeMixin had its own inlined copy of the bind logic**
-- The Bug 2 (no-clip sentinel) and Bug 4 (camera-relative equation refresh) fixes were only applied to `IplProgramBindHook.onBind`, not the inlined copy in `IplGlUseProgramProbeMixin`. So vanilla terrain shaders bound via `GlStateManager._glUseProgram` still had stale clip equations.
-- Now `IplGlUseProgramProbeMixin` is a thin delegator that calls `IplProgramBindHook.onBind(program)`. Single source of truth for the bind logic.
-- Effect: Bug 2 + Bug 4 fixes now apply to all program bind paths.
+- Game boots with IP + Sable + DH + Iris + Sodium + Veil + Flywheel all loaded together
+- No crash on launch (the original IP+Sable collision is fixed upstream by IPSable)
+- Portals render and you can walk through them
+- Cross-portal physics (Sable sub-levels straddle portals) — upstream IPSable work
+- Sound Physics mods no longer spam the log with raycast errors (`MixinBlockGetter`)
+- DH's render-setup handler no longer throws 15,000+ exceptions per session (`IplDhOverrideInjectorMixin`)
+- Auto-enable compatibility render mode when Iris + DH are both detected (`IPModEntryClient`)
+- Lightmap always updates when switching dimensions for portal render (`MyGameRenderer`)
 
-**Bug B: IplProgramBindHook was missing slot 2 (ipl_subLevelClipEquation[1]) write**
-- Only `IplGlUseProgramProbeMixin` wrote slot 2 (the multi-straddle second cut). Programs bound via `ProgramManager.glUseProgram` (Iris entity/deferred/terrain shaders + Flywheel embeddings) missed the second cut.
-- Now `IplProgramBindHook.onBind` writes slot 2 in the active path (when `haveActive || inPortalRender || inSubLevelBracket`), matching the old `IplGlUseProgramProbeMixin` behavior. The early-return path (no portal, no sub-level bracket) deliberately does NOT touch slot 1/2 because they're owned by Sable's sub-level pipeline and stale values are harmless outside a sub-level bracket (GL_CLIP_DISTANCE1/2 are disabled).
-- Effect: multi-straddle portals (portals inside portals) clip correctly for all programs.
+## Currently in the code, untested in-game
 
-**Bug C: refreshClipEquationForCurrentCamera only refreshed the world-space equation**
-- The eye-space equation (`activeClipPlaneAfterModelView`) stayed stale. Entity / particle / block-entity shaders that do `dot((ModelViewMat * Position).xyz, eq)` got stale clip equations.
-- Now also refreshes the eye-space equation using `RenderSystem.getModelViewMatrix()`.
-- Effect: entity / particle / block-entity shadow stripes fixed.
+These are code-level changes from the latest investigation round. They're based on DH 3.2.0-b bytecode disassembly, Mixin source analysis, and RenderSystem API verification. They should fix the listed bugs in theory, but none have been confirmed in-game yet.
 
-**Bug D: IplDhSkipHostingDimensionMixin never applied (constructor cancellation anti-pattern)**
-- Mixin refuses to apply any `cancellable = true` injection on a `<init>` method (throws `InvalidInjectionException`). The `require = 0` silently swallowed the failure, so the mixin never applied. Bug 7's "fix" was completely non-functional.
-- Even if it HAD applied, cancelling at `<init>` HEAD only skips the body of that constructor — `super()` already returned and the subclass `<init>` continues, leaving the DhLevel in a half-initialized state that NPEs on every chunk update.
-- Replaced: now targets `DhServerWorld.getOrLoadLevel` + `DhClientServerWorld.getOrLoadLevel` with `@Inject(HEAD, cancellable=true)` returning null when the DhDimensionTracker flag is set. Safe because `ServerApi.serverLevelLoadEvent` pops the return value without dereferencing it (verified by DH 3.2.0-b bytecode disassembly).
-- Effect: Bug 7 actually works now.
+### Bug 1: Terrain disappears near portal
 
-**Bug E: IplServerLevelDhTrackerMixin comment was wrong twice**
-- Said "one server tick" but timeout is 1000ms (20 ticks).
-- Said "DhDimensionTracker's own tick logic" but DhDimensionTracker has no tick logic — it uses a deadline-based lazy clear in `isHostingDimensionLoading()`.
-- Comments corrected.
+- **Status:** Code-level, untested
+- **Root cause:** `FrontClipping.disableClipping()` not called after `popPortalLayer` in the compatibility renderer. Stale clip plane clips source terrain.
+- **Fix:** Added defensive `FrontClipping.disableClipping()` call after `popPortalLayer()` in `IrisCompatibilityPortalRenderer.doRenderPortal`. Under Iris, `MixinLevelRenderer.onAfterRenderingLayer` may not fire if Iris bypasses the normal `renderSectionLayer` path.
+- **File:** `src/main/java/qouteall/imm_ptl/core/compat/iris_compatibility/IrisCompatibilityPortalRenderer.java`
 
-**Bug F: DhDimensionTracker race condition (theoretical)**
-- Research (DH 3.2.0-b bytecode disassembly) confirmed the whole chain `ServerLevel.<init>` → `LevelEvent.Load` → `ServerApi.serverLevelLoadEvent` → `getOrLoadLevel` → `new DhServerLevel` runs synchronously on the server thread. The flag is consumed within microseconds of being set.
-- The 1-second deadline in DhDimensionTracker is now documented as a safety net only — it never trips in practice.
+### Bug 2: Liquids and particles visible through terrain
 
-**Bug G: Hardcoded dimension ID string**
-- `IplServerLevelDhTrackerMixin` used `"ipl_sable:sublevels"` string literal. Now uses the canonical `SableSubLevelDimension.SUBLEVELS` constant.
-- Effect: stays in sync if the dimension ID ever changes.
+- **Status:** Code-level, untested
+- **Root cause:** The clip equation write hook had an early return that skipped the upload when clipping was not active. Shaders bound before the portal bracket opened never got the clip equation, so the clip test always passed and nothing got clipped.
+- **Fix:** When not in a portal render and not in a sub-level bracket, now writes the no-clip sentinel `(0,0,0,1)` to the shader's `iportal_ClippingEquation` uniform before returning. This ensures stale equations from previous portal renders are cleared.
+- **Also:** This fix was originally only applied to `IplProgramBindHook.onBind`. `IplGlUseProgramProbeMixin` had its own ~200-line inlined copy of the bind logic that was missed. Deduplicated so both bind hooks delegate to a single shared path. **This was a critical gap** — vanilla terrain shaders bound via `GlStateManager._glUseProgram` still had stale clip equations and leaked, despite the changelog claiming the bug was fixed.
+- **Files:** `src/main/java/ipl/sable/render/IplProgramBindHook.java`, `src/main/java/ipl/sable/mixin/client/IplGlUseProgramProbeMixin.java`
 
-**Bug H: Version mismatch**
-- `gradle.properties` had `fork_version=0.6.7` but `HANDOFF.md` and `BUILD.md` said 0.6.0. Bumped to 0.6.8 and synced all references.
+### Bug 4: Shadow stripes
 
-**Bug I: changelog said "DhDimensionTracker (thread-local flag)"**
-- DhDimensionTracker is NOT thread-local — it's a `static volatile` field on a singleton. Fixed.
+- **Status:** Code-level, untested
+- **Root cause:** The clip equation is camera-relative. When the camera moves between shader binds, the equation is stale. The stale equation shifts the clip plane by however much the camera moved, creating bands of wrong lighting proportional to camera movement. Thickness changes because camera speed varies. Stripes are parallel to the portal plane, not to chunks.
+- **Fix:** Added `FrontClipping.refreshClipEquationForCurrentCamera()` which re-computes BOTH the world-space equation (used by terrain shaders that do `dot(Position + ChunkOffset, eq)`) AND the eye-space equation (used by entity / particle / BE shaders that do `dot((ModelViewMat * Position).xyz, eq)`) using `RenderSystem.getModelViewMatrix()`. Called from `IplProgramBindHook.onBind` before uploading the equation, on every shader bind.
+- **Also:** Same deduplication issue as Bug 2 — the fix was originally only applied to one of two bind hooks. Fixed.
+- **Files:** `src/main/java/qouteall/imm_ptl/core/render/FrontClipping.java`, `src/main/java/ipl/sable/render/IplProgramBindHook.java`
 
-**Bug J: DhConfigPatch first-launch silent no-op**
-- On first launch, DH hasn't generated its config yet, so `patchConfig` returned silently. The patch only took effect on the SECOND launch (after DH created the config), and even then only on the THIRD launch (because DH reads config at startup).
-- Now `patchConfig` returns a `boolean` indicating success. `IPModEntryClient` schedules a retry task (every 5 seconds, up to 12 attempts = 60 seconds total) when the first call returns false. Once the config exists, the retry succeeds and the task removes itself.
-- Effect: first-launch now works correctly without manual relaunching.
+### Bug 7: DH data collision
 
-**Bug K: Dead setHostingDimensionLoading(false) overloads**
-- Both overloads accepted `false` but no caller ever passed `false`. The flag only ever gets cleared by the deadline check in `isHostingDimensionLoading()`.
-- Kept the overloads (they're API-complete for future use), but added documentation noting that the deadline is the primary clear mechanism.
+- **Status:** Code-level, untested. The previous "fix" was completely non-functional.
+- **Root cause:** DH creates a `DhLevel` for the `ipl_sable:sublevels` hosting dimension, which pollutes DH's per-dim caches.
+- **Previous attempt (BROKEN):** `@Pseudo` mixin on `AbstractDhLevel.<init>` with `cancellable = true`. Mixin refuses to apply any cancellable injection on a constructor (throws `InvalidInjectionException`), and `require = 0` silently swallowed the failure. The mixin NEVER applied. Bug 7's "fix" was completely non-functional from the moment it was committed until it was replaced.
+- **Current fix:** `@Pseudo` mixin targeting `DhServerWorld.getOrLoadLevel` + `DhClientServerWorld.getOrLoadLevel` with `@Inject(HEAD, cancellable=true)` returning null when the `DhDimensionTracker` flag is set. Safe because `ServerApi.serverLevelLoadEvent` pops the return value without dereferencing it (verified by DH 3.2.0-b bytecode disassembly).
+- **Threading:** Research confirmed the whole chain (`ServerLevel.<init>` → `LevelEvent.Load` → `ServerApi.serverLevelLoadEvent` → `getOrLoadLevel` → `new DhServerLevel`) runs synchronously on the server thread. The 1-second deadline in `DhDimensionTracker` is a safety net only — it never trips in practice.
+- **Files:** `src/main/java/ipl/sable/mixin/IplDhSkipHostingDimensionMixin.java`, `src/main/java/ipl/sable/mixin/IplServerLevelDhTrackerMixin.java`, `src/main/java/ipl/sable/dh/DhDimensionTracker.java`
 
-**Bug L: enable_iris=false dead config**
-- `gradle.properties` had `enable_iris=false` but it was only referenced in `build.gradle.old` (not the active build script). Removed.
+### Slot 2 (multi-straddle second cut) missing from one bind hook
 
-**Bug M: Duplicate IPL$LOC_CACHE**
-- `IplProgramBindHook.IPL$LOC_CACHE` and `IplGlUseProgramProbeMixin.IPL$LOC_CACHE` both cached uniform locations per program ID. Same data, twice the memory.
-- After Bug A fix (deduplication), only `IplProgramBindHook.IPL$LOC_CACHE` remains.
+- **Status:** Code-level, untested
+- **Root cause:** `IplProgramBindHook.onBind` only wrote slot 1 (`ipl_subLevelClipEquation`), never slot 2 (`ipl_subLevelClipEquation[1]`). `IplGlUseProgramProbeMixin` wrote both. Programs bound via `ProgramManager.glUseProgram` (Iris entity/deferred/terrain shaders + Flywheel embeddings) missed the multi-straddle second cut.
+- **Fix:** `IplProgramBindHook.onBind` now writes slot 2 in the active path, matching the old `IplGlUseProgramProbeMixin` behavior. The early-return path deliberately doesn't touch slot 1/2 because they're owned by Sable's sub-level pipeline and stale values are harmless outside a sub-level bracket (GL_CLIP_DISTANCE1/2 are disabled).
+- **Effect:** Multi-straddle portals (portals inside portals) should clip correctly for all programs now.
+- **File:** `src/main/java/ipl/sable/render/IplProgramBindHook.java`
 
-**Bug N: IPL$SLOT1_FLIP diagnostic was inconsistent**
-- `IplProgramBindHook` had `IPL$SLOT1_FLIP`; `IplGlUseProgramProbeMixin` did NOT. So `-Dipl.sable.clip.slot1Flip=true` only flipped the equation for one bind path.
-- After Bug A fix (deduplication), `IPL$SLOT1_FLIP` lives in `IplProgramBindHook` and applies to all bind paths uniformly. Also extended to cover slot 2 (the multi-straddle second cut) so the diagnostic is complete.
+### DH config first-launch silent no-op
 
-**Bug O: DhConfigPatch.addToCsv edge case**
-- A single `"` character would match `startsWith("\"") && endsWith("\"")` and then throw `StringIndexOutOfBoundsException` in `substring`.
-- Added `value.length() >= 2` guard.
+- **Status:** Code-level, untested
+- **Root cause:** On first launch, DH hasn't generated its `DistantHorizons.toml` config yet, so `patchConfig` returned silently. The patch only took effect on the second launch (after DH created the config), and even then only on the third launch (because DH reads config at startup).
+- **Fix:** `patchConfig` now returns a boolean indicating success. `IPModEntryClient` schedules a retry task (every 5 seconds, up to 12 attempts = 60 seconds total) when the first call returns false. Once the config exists, the retry succeeds and the task removes itself.
+- **Files:** `src/main/java/ipl/sable/dh/DhConfigPatch.java`, `src/main/java/qouteall/imm_ptl/core/platform_specific/IPModEntryClient.java`
 
-## 0.6.7 (indev)
+### Smaller cleanups in the same pass
 
-### Rendering fixes (from investigation doc)
+- `IplServerLevelDhTrackerMixin` now uses `SableSubLevelDimension.SUBLEVELS` constant instead of hardcoded string
+- `DhDimensionTracker` documented as static volatile (was misleadingly called "thread-local" before)
+- `IPL$SLOT1_FLIP` diagnostic moved to `IplProgramBindHook` so it applies uniformly to all bind paths
+- `DhConfigPatch.addToCsv` no longer throws `StringIndexOutOfBoundsException` on a malformed single `"` character
+- `enable_iris=false` dead config removed from `gradle.properties`
+- Duplicate `IPL$LOC_CACHE` maps merged into one (was wasted memory across two bind hooks)
 
-**Bug 1: Terrain disappears near portal**
-- Root cause: FrontClipping.disableClipping() not called after popPortalLayer in the compatibility renderer. Stale clip plane clips source terrain.
-- Fix: added defensive FrontClipping.disableClipping() call after popPortalLayer() in IrisCompatibilityPortalRenderer.doRenderPortal.
+## Not fixed yet
 
-**Bug 2: Liquids and particles visible through terrain**
-- Root cause: IplProgramBindHook.onBind had an early return that skipped the clip equation upload when clipping was not active. Shaders bound before the portal bracket opened never got the clip equation, so the clip test always passed and nothing got clipped.
-- Fix: when not in a portal render and not in a sub-level bracket, now writes the no-clip sentinel (0,0,0,1) to the shader's iportal_ClippingEquation uniform before returning. This ensures stale equations from previous portal renders are cleared.
+### Bug 3: Portal visible through blocks with shaders
 
-**Bug 4: Shadow stripes (revised)**
-- Root cause: the clip equation is camera-relative. When the camera moves between shader binds, the equation is stale. The stale equation shifts the clip plane by however much the camera moved, creating bands of wrong lighting proportional to camera movement. Thickness changes because camera speed varies. Stripes are parallel to the portal plane, not to chunks.
-- Fix: added FrontClipping.refreshClipEquationForCurrentCamera() which re-computes the world-space clip equation using the current camera position. Called from IplProgramBindHook.onBind before uploading the equation. This ensures every shader bind gets an up-to-date equation.
+- **Status:** Not fixed
+- **Root cause:** Iris depth buffer management in the compatibility renderer. The portal quad renders on top of terrain because depth clamp is enabled and Iris's depth buffer state is unknown.
+- **Next step:** Investigate Iris depth buffer state before `drawPortalAreaWithFramebuffer`.
 
-**Bug 7: DH data collision (Phase 4)**
-- Root cause: DH creates a DhLevel for the ipl_sable:sublevels hosting dimension. The original investigation claimed this was due to LocalSaveStructure path accumulation, but DH 3.2.0-b bytecode disassembly revealed LocalSaveStructure uses a per-dimension ConcurrentHashMap cache, not path accumulation. The actual issue is more nuanced (DH's per-dim caches get polluted when the hosting dim exists at all).
-- Fix: @Pseudo mixin on DhServerWorld.getOrLoadLevel + DhClientServerWorld.getOrLoadLevel that cancels the call when DhDimensionTracker flag is set. Returns null - safe because ServerApi.serverLevelLoadEvent pops the return value without dereferencing it.
-- Previous attempt: @Pseudo mixin on AbstractDhLevel.<init> with cancellable=true. Mixin refuses to apply cancellable injections on constructors (InvalidInjectionException), silently swallowed by require=0. The mixin never applied. Replaced.
+### Bug 5: Ghost terrain
 
-### What still needs investigation
+- **Status:** Not fixed. Might be fixed by the Bug 4 fix (stale clip equation was the root cause), needs testing.
+- **Root cause:** Consequence of Bug 4 — stale clip equation lets destination terrain leak through.
 
-- Bug 3: Portal visible through blocks with shaders (Iris depth buffer management)
-- Bug 5: Ghost terrain (should be fixed by Bug 4 + Bug C, needs testing)
-- Bug 6: Wrong water color (biome color resolver not swapped during portal render)
+### Bug 6: Wrong water color
 
-### Previous fixes (kept)
+- **Status:** Not fixed
+- **Root cause:** Biome color resolver not swapped during portal render. Water color comes from `BiomeColors.getAverageWaterColor()` which is dimension-specific. `MyGameRenderer` swaps level/renderer/camera but NOT `BlockColors` or the biome resolver.
+- **Next step:** Swap `BlockColors` / biome resolver in `MyGameRenderer.switchAndRenderTheWorld` when entering portal content render.
 
-- Sound Physics raycast log fix (MixinBlockGetter)
-- Auto-enable compatibility render mode when Iris + DH detected (IPModEntryClient)
-- DH OverrideInjector mixin (stops 15K errors/session)
-- DH config patch (ignoredDimensionCsv) - now with retry mechanism for first-launch
-- Lightmap always updated (MyGameRenderer)
+## Tried and reverted (do not try again)
+
+- `glClear(GL_DEPTH_BUFFER_BIT)` before portal content — didn't fix invisible terrain
+- Deferred to main FB blit after each portal — didn't fix ghost blocks
+- Removed `setPipeline(null)` — didn't fix black screen, caused portal-through-blocks
+- `FrontClipping.ADJUSTMENT` 0.01 to 0.1 — didn't fix shadow stripes
 
 ## Upstream history
 
-This fork builds on top of upstream IPSable v0.5.0 (commit f5e0471).
+Fork builds on top of upstream IPSable (commit `f5e0471`). That commit is tagged `fork-baseline-v0.5.0` in this repo's history so it's easy to diff against the upstream baseline.
