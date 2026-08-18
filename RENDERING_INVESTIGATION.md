@@ -1,6 +1,8 @@
 # Rendering Investigation
 
-This is from my testing in the Create Convoluted modpack. All bugs reproduced with the indev build (commit 587343f) running Iris + DH + Sodium + Veil + Flywheel on NeoForge 1.21.1.
+This is from my testing in the Create Convoluted modpack. All bugs reproduced running Iris + DH + Sodium + Veil + Flywheel on NeoForge 1.21.1.
+
+Note: Sable updated from 2.0.3 to 2.0.4 and Veil from 4.1.4 to 4.3.2 in the modpack since the last test. This may change compatibility.
 
 ---
 
@@ -17,7 +19,9 @@ Files:
 - `MixinLevelRenderer.java:222-234` (onAfterRenderingLayer disables clip, but may not fire under Iris)
 - `IrisCompatibilityPortalRenderer.java:94-131` (doRenderPortal, no defensive disableClipping)
 
-Fix: add `FrontClipping.disableClipping()` after `popPortalLayer()` in `doRenderPortal`.
+Fix applied: added `FrontClipping.disableClipping()` after `popPortalLayer()` in `doRenderPortal`. NOT YET TESTED because the user has not successfully loaded our mod in the latest builds.
+
+Status: fix applied, untested.
 
 ---
 
@@ -31,7 +35,9 @@ Files:
 - `IplProgramBindHook.java:100-108` (early return)
 - `MixinLevelRenderer.java:140-155` (onMyBeforeTranslucentRendering disables clipping)
 
-Fix: when `PortalRendering.isRendering()` is true, always write the cached clip equation to the program, even if `isClippingEnabled` is false. Remove the early return for the portal render case.
+Fix applied: when not in a portal render and not in a sub-level bracket, now writes the no-clip sentinel (0,0,0,1) to the shader's iportal_ClippingEquation uniform before returning. This clears stale equations from previous portal renders.
+
+Status: fix applied, untested.
 
 ---
 
@@ -45,11 +51,13 @@ Files:
 - `IrisCompatibilityPortalRenderer.java:103-114` (enableDepthClamp + drawPortalArea)
 - `MyRenderHelper.java:146-170` (drawPortalAreaWithFramebuffer)
 
-Fix: before drawing the portal area, verify the main FB depth buffer has the source dimension's depth. If Iris swapped it, restore from the deferred buffer or disable depth test for the portal quad.
+Fix approach: before drawing the portal area, verify the main FB depth buffer has the source dimension's depth. If Iris swapped it, restore from the deferred buffer or disable depth test for the portal quad.
+
+Status: NOT FIXED. Needs investigation.
 
 ---
 
-### Bug 4: Shadow stripes (revised)
+### Bug 4: Shadow stripes
 
 Stripes of broken lighting across terrain, 5-7 blocks thick, spaced 3-5 blocks apart. They are NOT aligned to chunks. They change in thickness. Happens in both dimensions.
 
@@ -64,7 +72,9 @@ Files:
 - `IplProgramBindHook.java:72-178` (onBind, uploads equation per shader bind)
 - `MixinLevelRenderer_Optional.java:73-85` (onGetShaderInRenderingLayer, re-uploads per layer)
 
-Fix: re-upload the clip equation when the camera position changes, not just when the shader is bound. Track the last camera position used for the upload, and force a re-upload when it moves more than a threshold (e.g. 0.01 blocks).
+Fix applied: added `FrontClipping.refreshClipEquationForCurrentCamera()` which re-computes the world-space clip equation using the current camera position. Called from `IplProgramBindHook.onBind` before uploading.
+
+Status: fix applied, untested.
 
 ---
 
@@ -75,6 +85,8 @@ Small sections of the opposite dimension, like 5x8x5 but it varies and can be en
 Root cause: consequence of Bug 4. The stale clip equation lets destination dimension terrain fragments leak outside the portal area. These leaked fragments get composited into the deferred buffer by `drawPortalAreaWithFramebuffer`. When the deferred buffer is drawn back to the main FB at the end of the frame, the leaked fragments appear as ghost terrain.
 
 Fix: fix Bug 4 first. If the clip equation is always correct, no destination terrain leaks, and ghost terrain disappears.
+
+Status: should be fixed by Bug 4 fix, untested.
 
 ---
 
@@ -92,7 +104,9 @@ Files:
 - `MyGameRenderer.java:202` (FogRendererContext swap, but no BlockColors swap)
 - `MyGameRenderer.java:165-190` (world/renderer/camera swap, but no color state swap)
 
-Fix: investigate whether Sodium's `BlockColors` or biome color resolver needs to be swapped when entering portal content render. May need a mixin on `ClientLevel.getBlockColors()` or `BiomeColors` to return the correct dimension's colors.
+Fix approach: investigate whether Sodium's `BlockColors` or biome color resolver needs to be swapped when entering portal content render. May need a mixin on `ClientLevel.getBlockColors()` or `BiomeColors` to return the correct dimension's colors.
+
+Status: NOT FIXED. Needs investigation.
 
 ---
 
@@ -106,26 +120,93 @@ Files:
 - `DhConfigPatch.java` (config-level fix, insufficient)
 - DH's `AbstractDhWorld` / `DhClientServerLevel` constructor (where path accumulation happens)
 
-Fix: write a `@Pseudo` mixin on DH's `AbstractDhWorld` or `DhClientServerLevel` to skip level creation entirely for `ipl_sable:sublevels`. This is our responsibility, upstream IPSable does not target DH compat.
+Fix approach: need a `@Pseudo` mixin on DH's `AbstractDhWorld` or `DhClientServerLevel` to skip level creation entirely for `ipl_sable:sublevels`. Previous attempt (IplServerLevelDhTrackerMixin on ServerLevel constructor) crashed because you can't inject at HEAD on a constructor before super(). Need a different approach:
+
+Option A: mixin on DH's `AbstractDhWorld.getServerLevelEvent` or similar event handler, cancel when the dimension is ipl_sable:sublevels. This avoids touching vanilla ServerLevel.
+
+Option B: mixin on DH's `DhClientServerLevel.<init>` (the DH class, not vanilla) to cancel creation. Use @At("RETURN") since HEAD requires static handler.
+
+Option C: use DH's own API (`DhApiBeforeDhInitEvent` or similar) to register the hosting dimension as ignored at runtime. Check if DH exposes a programmatic API for this.
+
+Status: NOT FIXED. Previous attempt was reverted because it caused a Quark crash. Config patch is the only workaround currently.
+
+---
+
+### Bug 8: Sounds from wrong dimension (Sound Physics)
+
+Sound Physics Remastered and Sound Physics Perfected play sounds from the wrong dimension when near a portal. You can hear nether sounds in the overworld and vice versa. The raycast also throws "Raycast too far" errors because it crosses the portal boundary.
+
+How IP works: when you look at a portal, IP re-enters `LevelRenderer.renderLevel` for the destination dimension. Both dimensions are rendered in the same framebuffer in the same render pass. Sound Physics raycasts for occlusion using `BlockGetter.traverseBlocks`, which doesn't know about portal boundaries. It raycasts in a straight line through the world, crossing the portal boundary, and hits blocks in the wrong dimension.
+
+Root cause: IP renders both dimensions simultaneously. The sound engine doesn't know which dimension a sound source is in relative to the listener. Sound Physics raycasts from the listener to the sound source, and if the source is in the destination dimension (rendered through the portal), the raycast goes through the portal into the wrong dimension's blocks.
+
+Files:
+- `MixinBlockGetter.java` (the raycast clamp, already fixed the log spam)
+- Sound Physics Remastered's `RaycastUtils.java` (calls `BlockGetter.traverseBlocks`)
+- Sound Physics Perfected's `RaycastingHelper.java` (same)
+- `MyGameRenderer.java:255` (re-enters renderLevel for destination dimension)
+
+Fix approaches:
+
+Option A: redirect Sound Physics raycasts through the portal transform. When Sound Physics calls `traverseBlocks`, transform the raycast start/end points through the portal's coordinate transform if the sound source is in the destination dimension. This would make the raycast go through the portal correctly. Requires mixin on Sound Physics's `RaycastUtils` / `RaycastingHelper` classes.
+
+Option B: suppress sounds from the destination dimension entirely. When `PortalRendering.isRendering()` is true, block sound events from the destination dimension from playing. Less immersive but simpler. Can be done with a mixin on `SoundEngine.play` or similar.
+
+Option C: provide a portal-aware raycast API. Replace `BlockGetter.traverseBlocks` with a version that knows about portal boundaries and transforms the raycast path through the portal. This is the most correct fix but the most complex.
+
+Option D: tell Sound Physics mods to not raycast during portal rendering. When `PortalRendering.isRendering()` is true, return "no occlusion" (full volume) for all sounds. This means sounds through portals will be louder (no occlusion) but won't play from the wrong dimension. Can be done with a mixin on Sound Physics's occlusion calculation.
+
+Recommended: Option D as a quick fix (suppress occlusion during portal render), then Option A as the proper fix (portal-transformed raycasts). Option B is a fallback if A is too complex.
+
+Status: NOT FIXED. The log spam is fixed (Bug 8 in previous changelog) but the actual wrong-dimension sounds still play.
 
 ---
 
 ## Fork vs upstream
 
-Our fork adds: DH compat (config patch + OverrideInjector mixin), sound physics log fix, lightmap always-update, auto-enable compat mode.
+Our fork adds: DH compat (config patch + OverrideInjector mixin), sound physics log fix, lightmap always-update, auto-enable compat mode, defensive disableClipping, clip equation refresh, no-clip sentinel on early return.
 
 Upstream IPSable already has: the entire rendering pipeline including `IrisCompatibilityPortalRenderer`, `FrontClipping`, `IplProgramBindHook`, Veil/Sodium/Flywheel compat.
 
-Bugs 1-5 are in upstream's renderer code. Bug 6 is in IP's dimension switching code. Bug 7 is a DH architectural issue that our config patch doesnt fully solve.
+Bugs 1-5 are in upstream's renderer code. Bug 6 is in IP's dimension switching code. Bug 7 is a DH architectural issue. Bug 8 is a Sound Physics + IP interaction.
+
+---
+
+## What works
+
+- Game boots (when the jar is actually in the mods folder)
+- Sound Physics log spam fixed (one-line warning instead of stack trace)
+- DH OverrideInjector error spam fixed (15K errors/session eliminated)
+- Cross-portal lighting improved (lightmap always updated)
+- Auto-enable compatibility render mode when Iris + DH detected
+- DH config patch to ignore ipl_sable:sublevels hosting dimension
+
+## What doesn't work
+
+All rendering bugs (1-6) are UNTESTED in the latest build because the user has not successfully loaded our mod in the latest builds. The fixes are applied but need testing.
+
+Bug 7 (DH data collision) needs a new approach after the ServerLevel mixin was reverted.
+
+Bug 8 (wrong dimension sounds) is a new addition. Needs a fix approach decision.
 
 ---
 
 ## Action plan
 
-1. Fix Bug 1 (defensive disableClipping) - quick, high impact
-2. Fix Bug 2 (remove early return in IplProgramBindHook) - quick, high impact
-3. Fix Bug 4 (re-upload clip equation on camera move) - medium, fixes stripes
-4. Fix Bug 7 (DH DhLevel creation mixin) - medium, our responsibility
-5. Bug 3, 5, 6 should be fixed or improved by fixing 1, 2, 4
+1. User needs to successfully build and load the mod (jar in mods folder)
+2. Test bugs 1, 2, 4 (fixes applied, untested)
+3. If bugs 1, 2, 4 are fixed, investigate bug 3 (portal through blocks)
+4. If bug 4 is fixed, bug 5 (ghost terrain) should be fixed too
+5. Investigate bug 6 (water color) - need to swap biome color resolver
+6. Bug 7 (DH data collision) - try Option B or C (mixin on DH class, not vanilla)
+7. Bug 8 (wrong dimension sounds) - try Option D first (suppress occlusion during portal render)
 
-If bugs persist after 1, 2, 4, 7 are done, investigate 3 and 6 further.
+---
+
+## How IP works (for context)
+
+When you look at a portal, IP re-enters `LevelRenderer.renderLevel` for the destination dimension. Both dimensions are rendered in the same framebuffer in the same render pass. A clip plane (FrontClipping) crops the destination dimension to the portal area so it doesn't overwrite the source dimension's content outside the portal.
+
+The clip plane equation is camera-relative: it includes the camera position. When the camera moves, the equation changes. If the equation isn't re-uploaded to shaders, the clip test uses stale values and terrain gets incorrectly clipped or unclipped.
+
+Sound Physics raycasts for occlusion using `BlockGetter.traverseBlocks`. It doesn't know about portal boundaries, so it raycasts in a straight line through the world, crossing the portal boundary into the wrong dimension.
