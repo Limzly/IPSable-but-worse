@@ -89,7 +89,7 @@ config="q_misc_util.mixins.json"
 # IP-Sable compat mixins (this fork's additions). Soft-applies when Sable is loaded;
 # silently no-ops via @Pseudo when Sable is absent.
 [[mixins]]
-#config="ipl_sable.mixins.json"
+config="ipl_sable.mixins.json"
 
 # A dependency - use the . to indicate dependency for a specific modid. Dependencies are optional.
 [[dependencies.immersive_portals_core]] #optional

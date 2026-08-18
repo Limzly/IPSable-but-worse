@@ -63,6 +63,7 @@
     "IplHostedEntityLookupMixin",
     "IplDhOverrideInjectorMixin",
     "IplSoundPhysicsPortalMixin",
+    "IplQuarkGlintFixMixin",
     "IplServerEntityGetterInvoker",
     "IplHostingEntityTrackingMixin",
     "IplTrackedEntityInvoker",
