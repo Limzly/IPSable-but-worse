@@ -266,7 +266,7 @@ dependencies {
     implementation "dev.engine-room.flywheel:flywheel-neoforge-${minecraft_version}:${flywheel_version}"
     implementation "com.tterrag.registrate:Registrate:${registrate_version}"
 
-    // Sable 2.0.3 release and its bundled Rapier/companion/Veil payloads.
+    // Sable 2.0.4 release and its bundled Rapier/companion/Veil payloads.
     // Maven coordinates for these GitHub projects do not exist on JitPack.
     implementation "dev.ryanhcode.sable:sable-neoforge-${minecraft_version}:${sable_version}"
     implementation "dev.ryanhcode.sable:sable-sable_rapier-${minecraft_version}:${sable_version}"

@@ -210,3 +210,51 @@ When you look at a portal, IP re-enters `LevelRenderer.renderLevel` for the dest
 The clip plane equation is camera-relative: it includes the camera position. When the camera moves, the equation changes. If the equation isn't re-uploaded to shaders, the clip test uses stale values and terrain gets incorrectly clipped or unclipped.
 
 Sound Physics raycasts for occlusion using `BlockGetter.traverseBlocks`. It doesn't know about portal boundaries, so it raycasts in a straight line through the world, crossing the portal boundary into the wrong dimension.
+
+---
+
+## Bug 8: Sounds from wrong dimension (Sound Physics) - REVISED
+
+Sound Physics Remastered and Sound Physics Perfected play sounds from the wrong dimension when near a portal. You can hear nether sounds in the overworld and vice versa.
+
+How IP works: when you look at a portal, IP re-enters `LevelRenderer.renderLevel` for the destination dimension. Both dimensions are rendered in the same framebuffer in the same render pass. Sound Physics raycasts for occlusion using `BlockGetter.traverseBlocks`, which doesn't know about portal boundaries.
+
+What the user wants: sounds from the other dimension should be audible but quieter based on distance from the portal. All sound effects (occlusion, reverb, attenuation) should apply. The sound should travel to the player correctly through the portal.
+
+Root cause: IP renders both dimensions simultaneously. The sound engine doesn't know which dimension a sound source is in relative to the listener. Sound Physics raycasts from the listener to the sound source, and if the source is in the destination dimension, the raycast goes through the portal into the wrong dimension.
+
+Files:
+- `MixinBlockGetter.java` (raycast clamp, log spam already fixed)
+- Sound Physics Remastered: `RaycastUtils.java` (calls `BlockGetter.traverseBlocks`)
+- Sound Physics Perfected: `RaycastingHelper.java` (same)
+- `MyGameRenderer.java:255` (re-enters renderLevel for destination dimension)
+- `Portal.java:448` (`transformPoint` - transforms a position through the portal)
+- `IPMcHelper.java:73` (`getNearbyPortals` - finds portals near a position)
+
+Fix approach: Portal-aware sound propagation
+
+When a sound plays from a different dimension than the player:
+1. Find the nearest portal connecting the player's dimension to the sound source's dimension (using `IPMcHelper.getNearbyPortals`)
+2. Transform the sound source position through the portal to get the "apparent" position (where the sound appears to come from in the player's dimension, using `Portal.transformPoint`)
+3. Calculate total path distance: player -> portal + portal -> source. This is longer than straight-line distance, so sounds through portals are naturally quieter.
+4. For occlusion: do a two-segment raycast:
+   - Segment 1: player to portal surface (in player's dimension)
+   - Segment 2: portal surface to sound source (in destination dimension)
+   - Combine occlusion from both segments
+5. For reverb: sample blocks around the apparent position (at the portal surface in the player's dimension)
+6. For volume: use total path distance for attenuation
+
+Implementation:
+- @Pseudo mixin on Sound Physics Remastered's `RaycastUtils.rayCast`
+- @Pseudo mixin on Sound Physics Perfected's `RaycastingHelper`
+- Both soft-apply (no crash if mods absent)
+- Check if sound source dimension != player dimension
+- If so, find portal, transform position, do multi-segment raycast
+
+Simpler alternative (less correct but easier):
+- Transform sound position to portal surface position
+- Let Sound Physics do normal raycast to that position
+- Correct occlusion for player -> portal segment only
+- Distance = player -> portal (shorter than actual, sounds louder than they should be)
+
+Status: NOT FIXED. Needs implementation. The log spam is fixed but actual wrong-dimension sounds still play.
