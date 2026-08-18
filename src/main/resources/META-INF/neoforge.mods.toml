@@ -120,16 +120,6 @@ side="BOTH"
 #[features.${mod_id}]
 #openGLVersion="[3.2,)"
 
-# Optional ordering dependencies to prevent mixin processing order issues.
-# Our mod's mixins change class loading timing, which can trigger Quark's
-# GlintRenderTypes to initialize before FML is ready. Loading after these
-# mods ensures our mixins don't disrupt their initialization sequence.
-[[dependencies.immersive_portals_core]]
-modId="quark"
-type="optional"
-ordering="AFTER"
-side="BOTH"
-
 [[dependencies.immersive_portals_core]]
 modId="zeta"
 type="optional"

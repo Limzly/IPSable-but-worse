@@ -63,7 +63,6 @@
     "IplHostedEntityLookupMixin",
     "IplDhOverrideInjectorMixin",
     "IplSoundPhysicsPortalMixin",
-    "IplQuarkGlintFixMixin",
     "IplServerEntityGetterInvoker",
     "IplHostingEntityTrackingMixin",
     "IplTrackedEntityInvoker",
@@ -126,6 +125,7 @@
     "client.IplStaffItemAimMixin",
     "client.IplHostedPlotEntityRenderMixin",
     "client.IplLevelRendererEntityInvoker"
+    "client.IplRenderBuffersCrashFixMixin",
   ],
   "injectors": {
     "defaultRequire": 0
