@@ -307,5 +307,3 @@ tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
 }
 
-// Disable the plain jar task - only produce jarJar (-all jar)
-jar.enabled = false
