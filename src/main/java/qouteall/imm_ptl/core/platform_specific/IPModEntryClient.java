@@ -169,6 +169,9 @@ public class IPModEntryClient {
             Helper.log("Iris is not present");
         }
         
+        // Check dependency versions and warn if they don't match what we tested against.
+        ipl.sable.DependencyVersionChecker.checkVersions();
+        
         IPModInfoChecking.initClient();
     }
     

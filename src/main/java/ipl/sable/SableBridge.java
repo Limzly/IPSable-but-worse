@@ -69,7 +69,12 @@ public final class SableBridge {
     @Nullable
     public static BlockState lookupNonAirSubLevelBlockAt(Level world, Vec3 worldPos) {
         if (!PRESENT) return null;
-        return SableImpl.lookupNonAirSubLevelBlockAt(world, worldPos);
+        try {
+            return SableImpl.lookupNonAirSubLevelBlockAt(world, worldPos);
+        } catch (Throwable t) {
+            LOG.warn("[IPL-SABLE] lookupNonAirSubLevelBlockAt failed: {}", t.getMessage());
+            return null;
+        }
     }
 
     /**
@@ -89,7 +94,12 @@ public final class SableBridge {
      */
     public static boolean isPlotChunk(Level world, ChunkPos chunkPos) {
         if (!PRESENT) return false;
-        return SableImpl.isPlotChunk(world, chunkPos);
+        try {
+            return SableImpl.isPlotChunk(world, chunkPos);
+        } catch (Throwable t) {
+            LOG.warn("[IPL-SABLE] isPlotChunk failed: {}", t.getMessage());
+            return false;
+        }
     }
 
     /**
@@ -116,7 +126,15 @@ public final class SableBridge {
             double dz = playerPos.z - z;
             return dx * dx + dy * dy + dz * dz;
         }
-        return SableImpl.distanceSquaredWithSubLevels(level, playerPos, x, y, z);
+        try {
+            return SableImpl.distanceSquaredWithSubLevels(level, playerPos, x, y, z);
+        } catch (Throwable t) {
+            LOG.warn("[IPL-SABLE] distanceSquaredWithSubLevels failed: {}", t.getMessage());
+            double dx = playerPos.x - x;
+            double dy = playerPos.y - y;
+            double dz = playerPos.z - z;
+            return dx * dx + dy * dy + dz * dz;
+        }
     }
 
     /**
