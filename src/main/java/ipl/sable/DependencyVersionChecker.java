@@ -29,6 +29,7 @@ public final class DependencyVersionChecker {
         EXPECTED_VERSIONS.put("sodium", "0.8.13-beta.2");
         EXPECTED_VERSIONS.put("distanthorizons", "3.2.0-b");
         EXPECTED_VERSIONS.put("create", "6.0.10");
+        EXPECTED_VERSIONS.put("sound_physics_aeronautics", "1.0.0");
         EXPECTED_VERSIONS.put("flywheel", "1.0.6");
     }
 
