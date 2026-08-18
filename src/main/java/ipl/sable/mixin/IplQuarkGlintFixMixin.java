@@ -56,8 +56,8 @@ public class IplQuarkGlintFixMixin {
     )
     private static void ip_preventEarlyClinit(CallbackInfo ci) {
         try {
-            // Check if ModLoadingContext is ready by attempting to access it
-            net.neoforged.fml.ModLoadingContext.getActiveContainer();
+            // Check if ModLoadingContext is ready by checking if ModList is initialized
+            net.neoforged.fml.ModList.get();
         } catch (Throwable t) {
             // ModLoadingContext is not ready. Cancel the static init.
             // This prevents the ExceptionInInitializerError crash.
