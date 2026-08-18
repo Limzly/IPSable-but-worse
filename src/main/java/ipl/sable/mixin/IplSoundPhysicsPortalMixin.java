@@ -104,7 +104,7 @@ public class IplSoundPhysicsPortalMixin {
 
                 // The apparent position is at the portal surface, offset toward the player
                 // by a small amount to ensure the sound is audible
-                Vec3 portalNormal = portal.getContentDirection().getNormal();
+                Vec3 portalNormal = portal.getNormal();
                 Vec3 portalCenter = portalOrigin;
 
                 // Project the player position onto the portal plane
