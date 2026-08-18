@@ -62,7 +62,6 @@
     "IplSplitParentStampMixin",
     "IplHostedEntityLookupMixin",
     "IplDhOverrideInjectorMixin",
-    "IplSoundPhysicsPortalMixin",
     "IplServerEntityGetterInvoker",
     "IplHostingEntityTrackingMixin",
     "IplTrackedEntityInvoker",
